@@ -86,6 +86,18 @@ export function toUtcIso(value: string): string {
   return parsed.toISOString();
 }
 
+const hourFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: config.timezone,
+  hour: "2-digit",
+  hourCycle: "h23",
+});
+
+/** The local hour (0-23) in the configured zone, for the at-risk nudge gate. */
+export function localHour(instant: Date = new Date()): number {
+  const part = hourFormatter.formatToParts(instant).find((p) => p.type === "hour");
+  return Number(part?.value ?? "0");
+}
+
 /** The offset string the configured zone is currently observing, e.g. "+02:00". */
 export function currentOffset(instant: Date = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-GB", {

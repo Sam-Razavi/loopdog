@@ -59,6 +59,13 @@ the next time you talk to the bot about anything, then answers what you actually
 asked. The push firing doesn't stop the conversational nudge — that's intentional,
 not a bug.
 
+### At-risk nudge
+
+Once a day, around `LOOPDOG_AT_RISK_NUDGE_HOUR` (default 21:00 local), Loopdog checks
+for habits with a live streak and nothing logged yet today — the grace-day case —
+and sends one DM if there's anything to say. If everything's covered, it stays
+quiet. Fires at most once per day; nothing spammy about it.
+
 ## Setup
 
 ### 1. Create the Discord bot
@@ -135,6 +142,7 @@ iterating on `src/prompt.ts` or the tool schemas without a Discord app open.
 | `LOOPDOG_DB` | `./loopdog.sqlite` | Created on first run |
 | `LOOPDOG_EFFORT` | `low` | `low`/`medium`/`high`/`xhigh`/`max`. Raise if tool choices look careless |
 | `LOOPDOG_PUSH_INTERVAL_MINUTES` | `5` | How often it checks for newly-overdue reminders to DM you about |
+| `LOOPDOG_AT_RISK_NUDGE_HOUR` | `21` | Local hour it checks for live streaks with nothing logged today. Fires at most once a day |
 
 Missing variables are reported all at once at boot, by name.
 
@@ -153,7 +161,7 @@ src/
 ├── index.ts      Discord client, owner gate, message routing
 ├── repl.ts       terminal chat harness — same agent loop, no Discord
 ├── agent.ts      the Claude tool-use loop
-├── pusher.ts     background poll that DMs you when a reminder falls due
+├── pusher.ts     background poll: reminder pushes + the at-risk nudge
 ├── prompt.ts     personality + live state injected each turn
 ├── tools.ts      tool schemas and dispatch
 ├── streak.ts     streak rules (pure, unit-tested)
@@ -188,4 +196,3 @@ Set `LOOPDOG_DAY_CUTOFF_HOUR=0` if you'd rather have strict calendar days.
 ## Not built yet
 
 - **Sunday evening digest.** A weekly recap: what held, what slipped.
-- **At-risk nudge.** One evening ping for a live streak with nothing logged yet.

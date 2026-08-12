@@ -9,7 +9,7 @@ import {
 import { assertDiscordConfigured, config } from "./config";
 import { respond } from "./agent";
 import { migrate } from "./db";
-import { startReminderPusher } from "./pusher";
+import { startScheduler } from "./pusher";
 
 const DISCORD_LIMIT = 2000;
 
@@ -67,9 +67,10 @@ async function main(): Promise<void> {
         `listening to ${config.ownerId} only.`,
     );
     console.log(
-      `Checking for overdue reminders every ${config.pushIntervalMinutes} minute(s).`,
+      `Checking for overdue reminders every ${config.pushIntervalMinutes} minute(s), ` +
+        `at-risk nudge around ${String(config.atRiskNudgeHour).padStart(2, "0")}:00.`,
     );
-    startReminderPusher(client);
+    startScheduler(client);
   });
 
   client.on(Events.MessageCreate, async (message) => {

@@ -15,6 +15,7 @@ export interface Config {
   effort: Effort;
   model: string;
   pushIntervalMinutes: number;
+  atRiskNudgeHour: number;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -79,6 +80,16 @@ function pushIntervalMinutes(): number {
   return minutes;
 }
 
+function atRiskNudgeHour(): number {
+  const raw = optional("LOOPDOG_AT_RISK_NUDGE_HOUR", "21");
+  const hour = Number(raw);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    coreProblems.push(`LOOPDOG_AT_RISK_NUDGE_HOUR must be an integer 0-23, got "${raw}"`);
+    return 21;
+  }
+  return hour;
+}
+
 export const config: Config = {
   discordToken: requiredInto("DISCORD_TOKEN", discordProblems),
   ownerId: requiredInto("DISCORD_OWNER_ID", discordProblems),
@@ -91,6 +102,7 @@ export const config: Config = {
   effort: effort(),
   model: "claude-sonnet-5",
   pushIntervalMinutes: pushIntervalMinutes(),
+  atRiskNudgeHour: atRiskNudgeHour(),
 };
 
 function report(problems: string[], hint: string): void {

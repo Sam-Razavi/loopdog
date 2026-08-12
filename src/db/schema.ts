@@ -39,4 +39,13 @@ CREATE TABLE IF NOT EXISTS messages (
   content    TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+-- One row per day the at-risk nudge has already fired (or been evaluated with
+-- nothing to say) for. Brand new table, so unlike notified_at on reminders
+-- this needs no retroactive column patch — CREATE TABLE IF NOT EXISTS covers
+-- both fresh and pre-existing databases.
+CREATE TABLE IF NOT EXISTS at_risk_nudges (
+  day     TEXT PRIMARY KEY,            -- YYYY-MM-DD, 4am-adjusted local day
+  sent_at TEXT NOT NULL
+);
 `;
