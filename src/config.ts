@@ -14,6 +14,7 @@ export interface Config {
   dbPath: string;
   effort: Effort;
   model: string;
+  pushIntervalMinutes: number;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -66,6 +67,18 @@ function effort(): Effort {
   return raw as Effort;
 }
 
+function pushIntervalMinutes(): number {
+  const raw = optional("LOOPDOG_PUSH_INTERVAL_MINUTES", "5");
+  const minutes = Number(raw);
+  if (!Number.isInteger(minutes) || minutes < 1) {
+    coreProblems.push(
+      `LOOPDOG_PUSH_INTERVAL_MINUTES must be a positive integer, got "${raw}"`,
+    );
+    return 5;
+  }
+  return minutes;
+}
+
 export const config: Config = {
   discordToken: requiredInto("DISCORD_TOKEN", discordProblems),
   ownerId: requiredInto("DISCORD_OWNER_ID", discordProblems),
@@ -77,6 +90,7 @@ export const config: Config = {
   dbPath: optional("LOOPDOG_DB", "./loopdog.sqlite"),
   effort: effort(),
   model: "claude-sonnet-5",
+  pushIntervalMinutes: pushIntervalMinutes(),
 };
 
 function report(problems: string[], hint: string): void {

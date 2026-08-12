@@ -52,9 +52,12 @@ Set `LOOPDOG_DAY_CUTOFF_HOUR=0` for strict calendar days.
 
 ### Overdue reminders
 
-There is no background scheduler yet. Instead, when a reminder's time has passed,
-Loopdog leads with it the next time you talk to it — about anything — and then answers
-what you actually asked.
+Two independent things happen. Loopdog checks every few minutes for reminders that
+just fell due and DMs you about it once, proactively — no need to be talking to it.
+Separately, until a reminder is actually completed or deleted, it also leads with it
+the next time you talk to the bot about anything, then answers what you actually
+asked. The push firing doesn't stop the conversational nudge — that's intentional,
+not a bug.
 
 ## Setup
 
@@ -131,6 +134,7 @@ iterating on `src/prompt.ts` or the tool schemas without a Discord app open.
 | `LOOPDOG_USER_NICKNAME` | — | Used for lighter moments. Optional |
 | `LOOPDOG_DB` | `./loopdog.sqlite` | Created on first run |
 | `LOOPDOG_EFFORT` | `low` | `low`/`medium`/`high`/`xhigh`/`max`. Raise if tool choices look careless |
+| `LOOPDOG_PUSH_INTERVAL_MINUTES` | `5` | How often it checks for newly-overdue reminders to DM you about |
 
 Missing variables are reported all at once at boot, by name.
 
@@ -149,6 +153,7 @@ src/
 ├── index.ts      Discord client, owner gate, message routing
 ├── repl.ts       terminal chat harness — same agent loop, no Discord
 ├── agent.ts      the Claude tool-use loop
+├── pusher.ts     background poll that DMs you when a reminder falls due
 ├── prompt.ts     personality + live state injected each turn
 ├── tools.ts      tool schemas and dispatch
 ├── streak.ts     streak rules (pure, unit-tested)
@@ -182,7 +187,5 @@ Set `LOOPDOG_DAY_CUTOFF_HOUR=0` if you'd rather have strict calendar days.
 
 ## Not built yet
 
-- **Proactive DM pushes.** A poller that DMs you when something falls due, instead of
-  waiting until you next say something.
 - **Sunday evening digest.** A weekly recap: what held, what slipped.
 - **At-risk nudge.** One evening ping for a live streak with nothing logged yet.

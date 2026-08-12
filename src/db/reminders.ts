@@ -7,6 +7,7 @@ export interface ReminderRow {
   due_at: string;
   created_at: string;
   completed_at: string | null;
+  notified_at: string | null;
 }
 
 /** The shape handed back to Claude — absolute time plus a readable local one. */
@@ -73,7 +74,12 @@ export function listReminders(options: {
   return rows.map((row) => view(row, now));
 }
 
-/** Pending reminders whose time has passed — the "surface on next message" feed. */
+/**
+ * Pending reminders whose time has passed — the "surface on next message" feed
+ * injected into the system prompt. Independent of push notifications: this
+ * keeps returning a reminder every time, regardless of notified_at, until it's
+ * actually completed or deleted.
+ */
 export function listOverdue(limit = 5): ReminderView[] {
   const now = nowUtcIso();
   const rows = getDb()
@@ -84,6 +90,30 @@ export function listOverdue(limit = 5): ReminderView[] {
     )
     .all(now, limit) as ReminderRow[];
   return rows.map((row) => view(row, now));
+}
+
+/**
+ * Overdue reminders that haven't been pushed yet — the feed the background
+ * pusher polls. Separate from listOverdue() on purpose: a push fires once,
+ * but the conversational nudge above keeps surfacing until resolved.
+ */
+export function listUnnotifiedOverdue(limit = 20): ReminderView[] {
+  const now = nowUtcIso();
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM reminders
+       WHERE completed_at IS NULL AND notified_at IS NULL AND due_at <= ?
+       ORDER BY due_at ASC LIMIT ?`,
+    )
+    .all(now, limit) as ReminderRow[];
+  return rows.map((row) => view(row, now));
+}
+
+/** Stamp a reminder as pushed. Call only after the DM actually sends. */
+export function markNotified(id: number): void {
+  getDb()
+    .prepare(`UPDATE reminders SET notified_at = ? WHERE id = ?`)
+    .run(nowUtcIso(), id);
 }
 
 export function completeReminder(id: number): ReminderView | null {

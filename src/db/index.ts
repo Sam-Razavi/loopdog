@@ -17,9 +17,28 @@ export function getDb(): Database.Database {
 }
 
 /**
- * Single-user app, so there is no migration framework here — just idempotent
- * DDL run on every boot.
+ * Adds a column to an existing table if it isn't there yet. SQLite has no
+ * `ADD COLUMN IF NOT EXISTS`, and `CREATE TABLE IF NOT EXISTS` in SCHEMA is a
+ * no-op against a table that already exists — so a database created before a
+ * column was added to the schema never picks it up on its own. This is how
+ * that database catches up. Idempotent: safe to call on every boot.
+ */
+function ensureColumn(table: string, column: string, ddl: string): void {
+  const columns = getDb().prepare(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  if (!columns.some((c) => c.name === column)) {
+    getDb().exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+
+/**
+ * Single-user app, so there is no migration framework here — SCHEMA covers
+ * fresh installs, and ensureColumn() catches up any additive column a
+ * pre-existing database is missing. Both converge on the same shape, and
+ * running this twice is always a safe no-op.
  */
 export function migrate(): void {
   getDb().exec(SCHEMA);
+  ensureColumn("reminders", "notified_at", "notified_at TEXT");
 }

@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS reminders (
   text         TEXT NOT NULL,
   due_at       TEXT NOT NULL,          -- UTC ISO-8601
   created_at   TEXT NOT NULL,
-  completed_at TEXT                    -- NULL while pending
+  completed_at TEXT,                   -- NULL while pending
+  notified_at  TEXT                    -- NULL until the reminder has been pushed
 );
 
 CREATE INDEX IF NOT EXISTS idx_reminders_pending

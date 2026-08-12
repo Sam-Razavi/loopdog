@@ -9,6 +9,7 @@ import {
 import { assertDiscordConfigured, config } from "./config";
 import { respond } from "./agent";
 import { migrate } from "./db";
+import { startReminderPusher } from "./pusher";
 
 const DISCORD_LIMIT = 2000;
 
@@ -65,6 +66,10 @@ async function main(): Promise<void> {
         `${config.timezone}, day rolls over at ${config.dayCutoffHour}:00, ` +
         `listening to ${config.ownerId} only.`,
     );
+    console.log(
+      `Checking for overdue reminders every ${config.pushIntervalMinutes} minute(s).`,
+    );
+    startReminderPusher(client);
   });
 
   client.on(Events.MessageCreate, async (message) => {
