@@ -110,6 +110,14 @@ DM it. In a server, @mention it.
 
 For a long-running deployment, `npm run build && npm start`.
 
+### Testing without Discord
+
+`npm run chat` drops you into a terminal conversation with the exact same
+tool-use loop, prompt and SQLite state Discord uses — no bot invite, no
+token, no server. It needs only `ANTHROPIC_API_KEY`; `DISCORD_TOKEN` and
+`DISCORD_OWNER_ID` are irrelevant to it and can stay unset. Useful for
+iterating on `src/prompt.ts` or the tool schemas without a Discord app open.
+
 ## Configuration
 
 | Variable | Default | Notes |
@@ -129,7 +137,8 @@ Missing variables are reported all at once at boot, by name.
 ## Development
 
 ```bash
-npm run dev        # watch mode
+npm run dev        # watch mode, full Discord bot
+npm run chat       # terminal REPL, no Discord needed — see above
 npm run typecheck  # tsc --noEmit
 npm test           # streak rules
 npm run build      # -> dist/
@@ -138,6 +147,7 @@ npm run build      # -> dist/
 ```
 src/
 ├── index.ts      Discord client, owner gate, message routing
+├── repl.ts       terminal chat harness — same agent loop, no Discord
 ├── agent.ts      the Claude tool-use loop
 ├── prompt.ts     personality + live state injected each turn
 ├── tools.ts      tool schemas and dispatch

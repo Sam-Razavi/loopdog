@@ -6,7 +6,7 @@ import {
   Partials,
   type Message,
 } from "discord.js";
-import { assertConfigured, config } from "./config";
+import { assertDiscordConfigured, config } from "./config";
 import { respond } from "./agent";
 import { migrate } from "./db";
 
@@ -45,7 +45,7 @@ function extractPrompt(message: Message, botId: string): string | null {
 }
 
 async function main(): Promise<void> {
-  assertConfigured();
+  assertDiscordConfigured();
   migrate();
 
   const client = new Client({
