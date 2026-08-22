@@ -152,7 +152,54 @@ Loopdog is up as loopdog#1234 — Europe/Stockholm, day rolls over at 4:00, list
 
 DM it. In a server, @mention it.
 
-For a long-running deployment, `npm run build && npm start`.
+For a long-running deployment, `npm run build && npm start` — or see
+[Deploying to Railway](#deploying-to-railway) below for a hosted option that
+stays online without a PC running.
+
+### Deploying to Railway
+
+Loopdog is a long-running process (a Discord gateway connection plus an
+`setInterval` scheduler) — it needs somewhere that stays on, not a serverless
+function. [Railway](https://railway.app) works well for this and the free
+Nixpacks builder needs no config: it detects `npm run build` and `npm start`
+from `package.json` on its own. A `railway.json` in the repo pins the builder
+explicitly and sets a restart-on-failure policy, since a Discord bot should
+come back up on its own after a crash rather than stay down.
+
+**The one thing that isn't optional: a Volume.** Railway's filesystem is
+ephemeral — every redeploy starts from a clean container, which means
+`loopdog.sqlite` (every reminder, every streak, all history) gets wiped
+unless it lives on a persistent Volume.
+
+1. **New Project → Deploy from GitHub repo** → pick `sam-razavi/loopdog`.
+2. On the service, open **Settings → Volumes → New Volume**. Mount path:
+   `/data`.
+3. **Variables** tab — add all of these (paste as `.env`-style text if
+   Railway offers a raw/bulk editor, it's faster than one at a time):
+   ```
+   DISCORD_TOKEN=...
+   DISCORD_OWNER_ID=...
+   ANTHROPIC_API_KEY=...
+   LOOPDOG_TZ=Europe/Stockholm
+   LOOPDOG_DAY_CUTOFF_HOUR=4
+   LOOPDOG_USER_NAME=Sam
+   LOOPDOG_USER_NICKNAME=Sobi
+   LOOPDOG_DB=/data/loopdog.sqlite
+   LOOPDOG_EFFORT=low
+   LOOPDOG_PUSH_INTERVAL_MINUTES=5
+   LOOPDOG_AT_RISK_NUDGE_HOUR=21
+   ```
+   `LOOPDOG_DB` has to point inside the volume's mount path (`/data`) —
+   that's the whole trick. Everywhere else it can stay as the `./loopdog.sqlite`
+   default.
+4. Deploy. Open the **Deploy Logs** and look for the same readiness line
+   `npm run dev` prints locally: `Loopdog is up as loopdog#...`. That means
+   it's connected to Discord's gateway and listening.
+5. DM it. This is the real end-to-end test — everything up to this point has
+   only been verified locally.
+
+Redeploy any time (a new push to this branch, or the Deploy button) without
+worrying about losing state — that's what the Volume is for.
 
 ### Testing without Discord
 
