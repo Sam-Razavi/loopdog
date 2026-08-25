@@ -41,4 +41,15 @@ function ensureColumn(table: string, column: string, ddl: string): void {
 export function migrate(): void {
   getDb().exec(SCHEMA);
   ensureColumn("reminders", "notified_at", "notified_at TEXT");
+  ensureColumn("reminders", "recurrence", "recurrence TEXT");
+}
+
+/**
+ * Safely snapshots the live database — including in-progress WAL contents —
+ * to a separate file, for the on-demand "back up my data" tool. better-
+ * sqlite3's .backup() is built for exactly this: copying a database that's
+ * actively being written to, without locking it.
+ */
+export async function backupDatabase(destPath: string): Promise<void> {
+  await getDb().backup(destPath);
 }

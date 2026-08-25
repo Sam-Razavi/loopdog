@@ -1,9 +1,17 @@
 import type { Client } from "discord.js";
 import { config } from "./config";
-import { listUnnotifiedOverdue, markNotified, type ReminderView } from "./db/reminders";
-import { habitsAtRisk, type HabitSummary } from "./db/habits";
+import {
+  advanceRecurrence,
+  countCompletedSince,
+  listReminders,
+  listUnnotifiedOverdue,
+  markNotified,
+  type ReminderView,
+} from "./db/reminders";
+import { habitsAtRisk, listHabits, weeklyLogCounts, type HabitSummary } from "./db/habits";
 import { hasNudgedToday, markNudged } from "./db/nudges";
-import { localDay, localHour } from "./time";
+import { hasDigestedThisWeek, markDigested } from "./db/digest";
+import { addDays, dayOfWeek, localDay, localHour } from "./time";
 
 /**
  * Composed server-side, deliberately, not through Claude — same reasoning as
@@ -49,7 +57,13 @@ async function checkAndPush(client: Client): Promise<void> {
     // Only mark as pushed once the send actually succeeds, so a failed
     // attempt (bad ID, no shared server, a network blip) retries next tick
     // instead of being silently dropped.
-    for (const reminder of overdue) markNotified(reminder.id);
+    for (const reminder of overdue) {
+      // A recurring reminder rolls its due_at forward to the next occurrence
+      // instead of just being marked notified — no "complete" step needed
+      // for it to keep firing. One-shot reminders keep the old behavior.
+      if (reminder.recurrence) advanceRecurrence(reminder.id);
+      else markNotified(reminder.id);
+    }
   } catch (error) {
     console.error("[pusher] failed to send reminder push:", error);
   }
@@ -80,18 +94,71 @@ async function checkAtRiskNudge(client: Client): Promise<void> {
   }
 }
 
+/**
+ * Same composition philosophy as the other two formatters — deterministic,
+ * no LLM call, predictable over flourish for an unattended weekly message.
+ * Unlike the push/nudge formatters, a fully quiet week (zero habits, zero
+ * completions) still sends: worth naming, not skipping.
+ */
+export function formatDigest(
+  habits: HabitSummary[],
+  weekCounts: Map<string, number>,
+  remindersCompleted: number,
+  remindersPending: number,
+): string {
+  const lines: string[] = [`Week in review:`];
+  if (habits.length === 0) {
+    lines.push(`  - nothing tracked yet`);
+  } else {
+    for (const habit of habits) {
+      const days = weekCounts.get(habit.name) ?? 0;
+      lines.push(`  - ${habit.name}: ${days}/7, streak at ${habit.current_streak}`);
+    }
+  }
+  lines.push(
+    `${remindersCompleted} reminder${remindersCompleted === 1 ? "" : "s"} done this week, ` +
+      `${remindersPending} still open.`,
+  );
+  return lines.join("\n");
+}
+
+async function checkWeeklyDigest(client: Client): Promise<void> {
+  const today = localDay();
+  if (dayOfWeek(today) !== 0) return; // only Sundays
+  if (localHour() < config.digestHour) return;
+  if (hasDigestedThisWeek(today)) return;
+
+  try {
+    const owner = await client.users.fetch(config.ownerId);
+    const weekAgoUtc = new Date(`${addDays(today, -6)}T00:00:00Z`).toISOString();
+    const message = formatDigest(
+      listHabits(),
+      weeklyLogCounts(),
+      countCompletedSince(weekAgoUtc),
+      listReminders({ status: "pending", limit: 1000 }).length,
+    );
+    await owner.send(message);
+    markDigested(today); // only after the send actually succeeds
+  } catch (error) {
+    console.error("[pusher] failed to send weekly digest:", error);
+    // not marked — retried next tick, same semantics as the other two checks
+  }
+}
+
 async function tick(client: Client): Promise<void> {
   await checkAndPush(client);
   await checkAtRiskNudge(client);
+  await checkWeeklyDigest(client);
 }
 
 /**
- * Starts the background poll for both kinds of proactive DM: overdue
- * reminders, and the once-daily at-risk habit nudge. Runs once immediately
- * (so a restart doesn't wait a full interval to catch anything that fell due
- * while the bot was down), then on a timer at LOOPDOG_PUSH_INTERVAL_MINUTES —
- * fine-grained enough to also catch "has the nudge hour arrived" without a
- * second timer.
+ * Starts the background poll for every kind of proactive DM: overdue
+ * reminders (including rolling recurring ones forward), the once-daily
+ * at-risk habit nudge, and the once-a-week Sunday digest. Runs once
+ * immediately (so a restart doesn't wait a full interval to catch anything
+ * that fell due while the bot was down), then on a timer at
+ * LOOPDOG_PUSH_INTERVAL_MINUTES — fine-grained enough to also catch "has the
+ * nudge/digest hour arrived" without extra timers.
  */
 export function startScheduler(client: Client): void {
   const intervalMs = config.pushIntervalMinutes * 60_000;

@@ -18,7 +18,13 @@ function textOf(message: Anthropic.Message): string {
     .trim();
 }
 
-export async function respond(userText: string): Promise<string> {
+export interface AgentReply {
+  text: string;
+  /** Path to a backup file to attach, when export_backup was called this turn. */
+  attachment?: string;
+}
+
+export async function respond(userText: string): Promise<AgentReply> {
   const messages: Anthropic.MessageParam[] = [
     ...recentTurns(HISTORY_TURNS).map(
       (turn): Anthropic.MessageParam => ({
@@ -33,6 +39,7 @@ export async function respond(userText: string): Promise<string> {
   // whole tool-use loop rather than shifting between rounds.
   const system = buildSystemPrompt();
   let reply = "";
+  let attachment: string | undefined;
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     const response = await client.messages.create({
@@ -49,7 +56,7 @@ export async function respond(userText: string): Promise<string> {
     });
 
     if (response.stop_reason === "refusal") {
-      return "That one tripped a safety filter on my end. Try rephrasing?";
+      return { text: "That one tripped a safety filter on my end. Try rephrasing?" };
     }
 
     reply = textOf(response);
@@ -68,10 +75,19 @@ export async function respond(userText: string): Promise<string> {
     for (const block of response.content) {
       if (block.type !== "tool_use") continue;
       try {
+        const result = await runTool(block.name, block.input);
+        if (
+          block.name === "export_backup" &&
+          typeof result === "object" &&
+          result !== null &&
+          "path" in result
+        ) {
+          attachment = String((result as { path: unknown }).path);
+        }
         results.push({
           type: "tool_result",
           tool_use_id: block.id,
-          content: JSON.stringify(runTool(block.name, block.input)),
+          content: JSON.stringify(result),
         });
       } catch (error) {
         const message =
@@ -97,5 +113,5 @@ export async function respond(userText: string): Promise<string> {
 
   appendTurn("user", userText);
   appendTurn("assistant", reply);
-  return reply;
+  return { text: reply, attachment };
 }

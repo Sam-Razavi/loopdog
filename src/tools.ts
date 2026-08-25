@@ -1,13 +1,18 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
+import { backupDatabase } from "./db";
 import {
   createReminder,
   completeReminder,
   deleteReminder,
   listReminders,
+  updateReminder,
+  type Recurrence,
   type ReminderStatus,
 } from "./db/reminders";
-import { getHabitDetail, listHabits, logHabit } from "./db/habits";
-import { isValidDay, localDay, toUtcIso } from "./time";
+import { getHabitDetail, listHabits, logHabit, unlogHabit } from "./db/habits";
+import { isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
 import { ToolError } from "./errors";
 
 export { ToolError };
@@ -19,7 +24,9 @@ export const TOOLS: Anthropic.Tool[] = [
       "Create a reminder with a specific due time. Call this whenever the user " +
       "asks to be reminded of something, or mentions something they need to do " +
       "at a particular time. Resolve relative phrasing like 'tomorrow at 9am' or " +
-      "'in two hours' against the current local time given in the system prompt.",
+      "'in two hours' against the current local time given in the system prompt. " +
+      "For something that repeats — 'every day', 'every Monday' — set recurrence " +
+      "instead of asking the user to recreate it each time.",
     input_schema: {
       type: "object",
       properties: {
@@ -32,8 +39,16 @@ export const TOOLS: Anthropic.Tool[] = [
         due_at: {
           type: "string",
           description:
-            "When it is due, as ISO-8601 with an explicit UTC offset, " +
+            "When it is first due, as ISO-8601 with an explicit UTC offset, " +
             "e.g. 2026-08-12T09:00:00+02:00. A timestamp without an offset is rejected.",
+        },
+        recurrence: {
+          type: "string",
+          enum: ["daily", "weekly"],
+          description:
+            "Omit for a one-shot reminder. 'daily' for 'every day', 'weekly' for " +
+            "'every Monday' or similar. Once pushed, it rolls forward to its next " +
+            "occurrence automatically — no need for the user to recreate it.",
         },
       },
       required: ["text", "due_at"],
@@ -153,6 +168,54 @@ export const TOOLS: Anthropic.Tool[] = [
       "rather than calling get_habit_streak repeatedly.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
+  {
+    name: "undo_habit_log",
+    description:
+      "Undo a habit log. Call this when the user says they logged something by " +
+      "mistake — 'undo that, I didn't actually go', 'remove yesterday's reading " +
+      "log'. This is a plain correction, not a big deal — just fix the number.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "The habit name." },
+        day: {
+          type: "string",
+          description: "YYYY-MM-DD. Omit for today.",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "edit_reminder",
+    description:
+      "Change an existing reminder's text and/or due time in place — 'actually " +
+      "push that back to 6pm', 'change that to say pick up the dry cleaning'. " +
+      "Use this instead of delete_reminder plus create_reminder. If the user " +
+      "describes it rather than giving an id, call list_reminders first.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "The reminder's id." },
+        text: { type: "string", description: "New wording. Omit to leave unchanged." },
+        due_at: {
+          type: "string",
+          description:
+            "New due time, ISO-8601 with an explicit UTC offset, same format as " +
+            "create_reminder. Omit to leave unchanged.",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "export_backup",
+    description:
+      "Create a downloadable backup of the database and attach it to the reply. " +
+      "Call this only when the user explicitly asks for a backup, an export, or " +
+      "to download their data — not routinely.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -198,12 +261,28 @@ function optionalInt(
   return value;
 }
 
-export function runTool(name: string, rawInput: unknown): unknown {
+function optionalRecurrence(
+  input: Record<string, unknown>,
+  key: string,
+): Recurrence | null {
+  const value = optionalStr(input, key);
+  if (value === undefined) return null;
+  if (value !== "daily" && value !== "weekly") {
+    throw new ToolError(`"${key}" must be "daily" or "weekly", got "${value}"`);
+  }
+  return value;
+}
+
+export async function runTool(name: string, rawInput: unknown): Promise<unknown> {
   const input = asRecord(rawInput);
 
   switch (name) {
     case "create_reminder": {
-      return createReminder(str(input, "text"), toUtcIso(str(input, "due_at")));
+      return createReminder(
+        str(input, "text"),
+        toUtcIso(str(input, "due_at")),
+        optionalRecurrence(input, "recurrence"),
+      );
     }
 
     case "list_reminders": {
@@ -259,6 +338,35 @@ export function runTool(name: string, rawInput: unknown): unknown {
 
     case "list_habits": {
       return { habits: listHabits() };
+    }
+
+    case "undo_habit_log": {
+      const day = optionalStr(input, "day") ?? localDay();
+      if (!isValidDay(day)) {
+        throw new ToolError(`"day" must be YYYY-MM-DD, got "${day}"`);
+      }
+      return unlogHabit(str(input, "name"), day);
+    }
+
+    case "edit_reminder": {
+      const id = int(input, "id");
+      const text = optionalStr(input, "text");
+      const dueAtRaw = optionalStr(input, "due_at");
+      if (text === undefined && dueAtRaw === undefined) {
+        throw new ToolError(`edit_reminder needs at least one of "text" or "due_at"`);
+      }
+      const updated = updateReminder(id, {
+        text,
+        dueAtUtc: dueAtRaw ? toUtcIso(dueAtRaw) : undefined,
+      });
+      if (!updated) throw new ToolError(`no reminder with id ${id}`);
+      return updated;
+    }
+
+    case "export_backup": {
+      const path = join(tmpdir(), `loopdog-backup-${nowUtcIso().replace(/[:.]/g, "-")}.sqlite`);
+      await backupDatabase(path);
+      return { ok: true, path };
     }
 
     default:

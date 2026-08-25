@@ -1,6 +1,7 @@
 import { getDb } from "./index";
 import { addDays, localDay, nowUtcIso } from "../time";
 import { computeStreak, type StreakInfo } from "../streak";
+import { ToolError } from "../errors";
 
 const MILESTONES = [7, 30, 100] as const;
 
@@ -111,4 +112,58 @@ export function listHabits(): HabitSummary[] {
 /** Habits with a live streak and nothing logged today — fuel for a nudge. */
 export function habitsAtRisk(): HabitSummary[] {
   return listHabits().filter((habit) => habit.at_risk);
+}
+
+export interface UndoResult extends StreakInfo {
+  name: string;
+  day: string;
+}
+
+/**
+ * Undo a habit log for a given day — for "I didn't actually go, undo that."
+ * Throws if there's nothing logged on that day (the caller turns this into a
+ * ToolError, mirroring how getHabitDetail reports an unknown habit).
+ */
+export function unlogHabit(name: string, day: string): UndoResult {
+  const habit = findHabit(name);
+  if (!habit) {
+    const known = listHabits().map((h) => h.name);
+    throw new ToolError(
+      known.length
+        ? `no habit called "${name}". Currently tracked: ${known.join(", ")}`
+        : `no habit called "${name}", and nothing is being tracked yet`,
+    );
+  }
+  const result = getDb()
+    .prepare(`DELETE FROM habit_logs WHERE habit_id = ? AND day = ?`)
+    .run(habit.id, day);
+  if (result.changes === 0) {
+    const detail = getHabitDetail(habit.name, 1);
+    throw new ToolError(
+      detail?.last_logged
+        ? `no log for "${habit.name}" on ${day} — last logged ${detail.last_logged}`
+        : `no log for "${habit.name}" on ${day}`,
+    );
+  }
+  const streak = computeStreak(loggedDays(habit.id), localDay());
+  return { ...streak, name: habit.name, day };
+}
+
+/**
+ * Days logged per habit over the last 7 days (today inclusive) — the "N/7"
+ * figure in the weekly digest. Keyed by habit name.
+ */
+export function weeklyLogCounts(): Map<string, number> {
+  const today = localDay();
+  const weekAgo = addDays(today, -6);
+  const rows = getDb()
+    .prepare(
+      `SELECT h.name AS name, COUNT(*) AS n
+       FROM habit_logs l
+       JOIN habits h ON h.id = l.habit_id
+       WHERE l.day >= ? AND l.day <= ?
+       GROUP BY h.name`,
+    )
+    .all(weekAgo, today) as { name: string; n: number }[];
+  return new Map(rows.map((row) => [row.name, row.n]));
 }

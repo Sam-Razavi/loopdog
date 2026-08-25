@@ -107,3 +107,55 @@ export function currentOffset(instant: Date = new Date()): string {
   const name = parts.find((p) => p.type === "timeZoneName")?.value ?? "GMT";
   return name.replace("GMT", "") || "+00:00";
 }
+
+const timeOfDayFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: config.timezone,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+/** The calendar day and wall-clock time an instant falls on, in the configured zone. */
+export function localTimeOfDay(instant: Date = new Date()): {
+  day: string;
+  hour: number;
+  minute: number;
+} {
+  const parts = timeOfDayFormatter.formatToParts(instant);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "0";
+  return {
+    day: `${get("year")}-${get("month")}-${get("day")}`,
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+  };
+}
+
+/**
+ * Advances an instant by whole calendar days while preserving its local
+ * wall-clock time — used to roll a recurring reminder's due_at forward. Naive
+ * "+24h in UTC" arithmetic drifts the local time-of-day across a DST
+ * transition; this instead re-derives the correct UTC offset for the new
+ * date, the same reasoning toUtcIso() already asks Claude to apply manually
+ * when it creates a reminder, done here in code for the automatic rollover.
+ */
+export function advanceLocalInstant(instant: Date, days: number): Date {
+  const { day, hour, minute } = localTimeOfDay(instant);
+  const nextDay = addDays(day, days);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  // Guess the instant as if the local wall-clock time were UTC, then correct
+  // by whatever offset is in effect on that date.
+  const guess = new Date(`${nextDay}T${pad(hour)}:${pad(minute)}:00Z`);
+  const offset = currentOffset(guess);
+  const sign = offset.startsWith("-") ? 1 : -1;
+  const [offHour, offMinute] = offset.slice(1).split(":").map(Number) as [number, number];
+  const offsetMs = (offHour * 60 + offMinute) * 60_000;
+  return new Date(guess.getTime() + sign * offsetMs);
+}
+
+/** 0 = Sunday … 6 = Saturday, for a YYYY-MM-DD day string. */
+export function dayOfWeek(day: string): number {
+  return new Date(`${day}T00:00:00Z`).getUTCDay();
+}

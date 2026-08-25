@@ -55,19 +55,22 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with seven tools attached. Claude
+Every message goes to Claude (`claude-sonnet-5`) with ten tools attached. Claude
 decides what to call and what to say; the bot is a thin harness around that loop.
 State lives in a local SQLite file, so everything survives a restart.
 
 | Tool | What it does |
 |---|---|
-| `create_reminder` | Store a reminder with a due time |
+| `create_reminder` | Store a reminder with a due time; optionally recurring (daily/weekly) |
 | `list_reminders` | Pending, completed, or due before a cutoff |
 | `complete_reminder` | Mark one done |
+| `edit_reminder` | Change a reminder's text or time in place |
 | `delete_reminder` | Cancel one outright |
 | `log_habit` | Record a habit for a day; creates the habit on first mention |
+| `undo_habit_log` | Un-log a habit for a day — for a mis-logged entry |
 | `get_habit_streak` | Current streak, best ever, and recent day-by-day history |
 | `list_habits` | Everything tracked, with streaks |
+| `export_backup` | Send the live database as a Discord file attachment |
 
 ### Streaks
 
@@ -99,6 +102,37 @@ Once a day, around `LOOPDOG_AT_RISK_NUDGE_HOUR` (default 21:00 local), Loopdog c
 for habits with a live streak and nothing logged yet today — the grace-day case —
 and sends one DM if there's anything to say. If everything's covered, it stays
 quiet. Fires at most once per day; nothing spammy about it.
+
+### Sunday evening digest
+
+Once a week, around `LOOPDOG_DIGEST_HOUR` (default 20:00 local) on Sundays, Loopdog
+sends a plain recap: how many of the last 7 days each habit was logged and its
+current streak, plus how many reminders you completed and how many are still open.
+Composed the same deterministic way as the push and nudge messages — no extra API
+call, nothing that can read oddly on an unattended message. Fires at most once
+a week, even if the bot restarts partway through Sunday.
+
+### Recurring reminders
+
+"Remind me every day at 7am to take vitamins" doesn't need to be recreated once
+it fires. A recurring reminder (`daily` or `weekly`) pushes once per occurrence,
+then quietly rolls its due time forward to the next one — no "complete" step
+required. Completing it the normal way still works and stops the recurrence, for
+when you're actually done with it.
+
+### Undo and edit
+
+Habit logs and reminders don't need to be deleted and recreated over a mistake.
+"Undo that, I didn't actually go" removes a habit log and reports the corrected
+streak; "actually push that back to 6pm" or "change that to say pick up the dry
+cleaning" edits a reminder in place.
+
+### Backups
+
+"Back up my data" gets you the live SQLite database as a Discord file attachment
+— useful insurance since the database otherwise only exists on whatever host is
+running Loopdog (see [Deploying to Railway](#deploying-to-railway) below for why
+this matters there specifically).
 
 ## Setup
 
@@ -188,6 +222,7 @@ unless it lives on a persistent Volume.
    LOOPDOG_EFFORT=low
    LOOPDOG_PUSH_INTERVAL_MINUTES=5
    LOOPDOG_AT_RISK_NUDGE_HOUR=21
+   LOOPDOG_DIGEST_HOUR=20
    ```
    `LOOPDOG_DB` has to point inside the volume's mount path (`/data`) —
    that's the whole trick. Everywhere else it can stay as the `./loopdog.sqlite`
@@ -199,7 +234,9 @@ unless it lives on a persistent Volume.
    only been verified locally.
 
 Redeploy any time (a new push to this branch, or the Deploy button) without
-worrying about losing state — that's what the Volume is for.
+worrying about losing state — that's what the Volume is for. If the Volume were
+ever lost, though, "back up my data" (see [Backups](#backups) above) is the way
+to get a copy off Railway entirely.
 
 ### Testing without Discord
 
@@ -224,6 +261,7 @@ transcript up top happened — no Discord app was open for any of it.
 | `LOOPDOG_EFFORT` | `low` | `low`/`medium`/`high`/`xhigh`/`max`. Raise if tool choices look careless |
 | `LOOPDOG_PUSH_INTERVAL_MINUTES` | `5` | How often it checks for newly-overdue reminders to DM you about |
 | `LOOPDOG_AT_RISK_NUDGE_HOUR` | `21` | Local hour it checks for live streaks with nothing logged today. Fires at most once a day |
+| `LOOPDOG_DIGEST_HOUR` | `20` | Local hour the Sunday weekly digest goes out. Fires at most once a week |
 
 Missing variables are reported all at once at boot, by name.
 
@@ -242,7 +280,7 @@ src/
 ├── index.ts      Discord client, owner gate, message routing
 ├── repl.ts       terminal chat harness — same agent loop, no Discord
 ├── agent.ts      the Claude tool-use loop
-├── pusher.ts     background poll: reminder pushes + the at-risk nudge
+├── pusher.ts     background poll: reminder pushes, at-risk nudge, weekly digest
 ├── prompt.ts     personality + live state injected each turn
 ├── tools.ts      tool schemas and dispatch
 ├── streak.ts     streak rules (pure, unit-tested)
@@ -274,6 +312,7 @@ in use.
 **A late-night log went to the wrong day.** That's the 4am rule working as intended.
 Set `LOOPDOG_DAY_CUTOFF_HOUR=0` if you'd rather have strict calendar days.
 
-## Not built yet
-
-- **Sunday evening digest.** A weekly recap: what held, what slipped.
+**It crashed and you found out from the logs, not a DM.** The crash alert is
+best-effort — if the crash itself takes down the network connection before the
+alert can send, there's nothing left to send it with. Check the Deploy Logs on
+Railway; the restart policy in `railway.json` brings it back regardless.

@@ -1,5 +1,7 @@
 import { getDb } from "./index";
-import { formatLocal, nowUtcIso } from "../time";
+import { advanceLocalInstant, formatLocal, nowUtcIso } from "../time";
+
+export type Recurrence = "daily" | "weekly";
 
 export interface ReminderRow {
   id: number;
@@ -8,6 +10,7 @@ export interface ReminderRow {
   created_at: string;
   completed_at: string | null;
   notified_at: string | null;
+  recurrence: Recurrence | null;
 }
 
 /** The shape handed back to Claude — absolute time plus a readable local one. */
@@ -18,6 +21,7 @@ export interface ReminderView {
   due_local: string;
   overdue: boolean;
   completed_at: string | null;
+  recurrence: Recurrence | null;
 }
 
 export type ReminderStatus = "pending" | "completed" | "all";
@@ -30,14 +34,21 @@ function view(row: ReminderRow, now = nowUtcIso()): ReminderView {
     due_local: formatLocal(new Date(row.due_at)),
     overdue: row.completed_at === null && row.due_at <= now,
     completed_at: row.completed_at,
+    recurrence: row.recurrence,
   };
 }
 
-export function createReminder(text: string, dueAtUtc: string): ReminderView {
+export function createReminder(
+  text: string,
+  dueAtUtc: string,
+  recurrence: Recurrence | null = null,
+): ReminderView {
   const now = nowUtcIso();
   const result = getDb()
-    .prepare(`INSERT INTO reminders (text, due_at, created_at) VALUES (?, ?, ?)`)
-    .run(text, dueAtUtc, now);
+    .prepare(
+      `INSERT INTO reminders (text, due_at, created_at, recurrence) VALUES (?, ?, ?, ?)`,
+    )
+    .run(text, dueAtUtc, now, recurrence);
   return view(getReminder(Number(result.lastInsertRowid))!, now);
 }
 
@@ -133,4 +144,54 @@ export function deleteReminder(id: number): ReminderView | null {
   if (!existing) return null;
   getDb().prepare(`DELETE FROM reminders WHERE id = ?`).run(id);
   return view(existing);
+}
+
+/**
+ * Rolls a recurring reminder's due_at forward to its next occurrence and
+ * clears notified_at, so the fresh occurrence is push-eligible again.
+ * completed_at is untouched — recurrence only governs what happens
+ * automatically once a reminder is pushed, not completion. Call only on a
+ * reminder that actually has recurrence set.
+ */
+export function advanceRecurrence(id: number): ReminderView {
+  const existing = getReminder(id);
+  if (!existing || !existing.recurrence) {
+    throw new Error(`advanceRecurrence called on reminder ${id} with no recurrence set`);
+  }
+  const days = existing.recurrence === "daily" ? 1 : 7;
+  const nextDueAt = advanceLocalInstant(new Date(existing.due_at), days).toISOString();
+  getDb()
+    .prepare(`UPDATE reminders SET due_at = ?, notified_at = NULL WHERE id = ?`)
+    .run(nextDueAt, id);
+  return view(getReminder(id)!);
+}
+
+/**
+ * Update a pending reminder's text and/or due time in place — for "actually
+ * push that back to 6pm" rather than delete-and-recreate. If due_at changes,
+ * notified_at resets: the old push doesn't apply to the new time.
+ */
+export function updateReminder(
+  id: number,
+  changes: { text?: string; dueAtUtc?: string },
+): ReminderView | null {
+  const existing = getReminder(id);
+  if (!existing) return null;
+
+  const text = changes.text ?? existing.text;
+  const dueAt = changes.dueAtUtc ?? existing.due_at;
+  const notifiedAt = changes.dueAtUtc !== undefined ? null : existing.notified_at;
+
+  getDb()
+    .prepare(`UPDATE reminders SET text = ?, due_at = ?, notified_at = ? WHERE id = ?`)
+    .run(text, dueAt, notifiedAt, id);
+  return view(getReminder(id)!);
+}
+
+/** How many reminders were completed since a given UTC instant — for the weekly digest. */
+export function countCompletedSince(cutoffUtc: string): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS n FROM reminders WHERE completed_at >= ?`)
+    .get(cutoffUtc) as { n: number };
+  return row.n;
 }

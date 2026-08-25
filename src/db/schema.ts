@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS reminders (
   due_at       TEXT NOT NULL,          -- UTC ISO-8601
   created_at   TEXT NOT NULL,
   completed_at TEXT,                   -- NULL while pending
-  notified_at  TEXT                    -- NULL until the reminder has been pushed
+  notified_at  TEXT,                   -- NULL until the reminder has been pushed
+  recurrence   TEXT                    -- NULL, 'daily', or 'weekly'
 );
 
 CREATE INDEX IF NOT EXISTS idx_reminders_pending
@@ -46,6 +47,14 @@ CREATE TABLE IF NOT EXISTS messages (
 -- both fresh and pre-existing databases.
 CREATE TABLE IF NOT EXISTS at_risk_nudges (
   day     TEXT PRIMARY KEY,            -- YYYY-MM-DD, 4am-adjusted local day
+  sent_at TEXT NOT NULL
+);
+
+-- One row per week the Sunday digest has already fired for. Same reasoning
+-- as at_risk_nudges: brand new table, so CREATE TABLE IF NOT EXISTS covers
+-- both fresh and pre-existing databases with no retroactive column patch.
+CREATE TABLE IF NOT EXISTS digests (
+  week    TEXT PRIMARY KEY,            -- the local Sunday's date, YYYY-MM-DD
   sent_at TEXT NOT NULL
 );
 `;

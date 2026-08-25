@@ -1,3 +1,4 @@
+import { unlink } from "node:fs/promises";
 import {
   ChannelType,
   Client,
@@ -45,6 +46,31 @@ function extractPrompt(message: Message, botId: string): string | null {
   return text || null;
 }
 
+/**
+ * Best-effort DM before crashing out. Only ever called from an actual
+ * uncaught exception or rejection — a graceful redeploy sends SIGTERM, not
+ * one of these, so this never fires on an ordinary Railway push, only on a
+ * genuine unexpected failure. The 5s race stops a hung send from blocking
+ * the exit; Railway's restartPolicy (railway.json) brings the process back.
+ */
+async function handleFatal(client: Client, error: unknown): Promise<void> {
+  console.error("[loopdog] fatal:", error);
+  try {
+    if (client.isReady()) {
+      const owner = await client.users.fetch(config.ownerId);
+      const message = `Crashed: ${error instanceof Error ? error.message : String(error)}. Restarting.`;
+      await Promise.race([
+        owner.send(message),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
+      ]);
+    }
+  } catch (sendError) {
+    console.error("[loopdog] failed to send crash alert:", sendError);
+  } finally {
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
   assertDiscordConfigured();
   migrate();
@@ -59,6 +85,9 @@ async function main(): Promise<void> {
     // Without this, DM channels arrive uncached and message events never fire.
     partials: [Partials.Channel, Partials.Message],
   });
+
+  process.on("uncaughtException", (error) => void handleFatal(client, error));
+  process.on("unhandledRejection", (reason) => void handleFatal(client, reason));
 
   client.once(Events.ClientReady, (ready) => {
     console.log(
@@ -86,9 +115,18 @@ async function main(): Promise<void> {
 
     try {
       if (message.channel.isSendable()) await message.channel.sendTyping();
-      const reply = await respond(prompt);
-      for (const part of chunk(reply)) {
-        await message.reply(part);
+      const { text, attachment } = await respond(prompt);
+      const parts = chunk(text);
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i]!;
+        const isLast = i === parts.length - 1;
+        await message.reply(
+          isLast && attachment ? { content: part, files: [attachment] } : part,
+        );
+      }
+      if (attachment) {
+        // Fire-and-forget: avoid accumulating backup files in temp storage.
+        unlink(attachment).catch(() => undefined);
       }
     } catch (error) {
       console.error("[loopdog]", error);
