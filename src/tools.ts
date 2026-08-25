@@ -16,7 +16,9 @@ import {
 import { getHabitDetail, listHabits, logHabit, unlogHabit } from "./db/habits";
 import { clearMute, setMute } from "./db/mute";
 import { createWatch, deleteWatch, listWatches } from "./db/watches";
+import { getMetricHistory, listMetrics, logMetric, type MetricMode } from "./db/metrics";
 import { renderHabitChart } from "./chart";
+import { renderMetricChart } from "./linechart";
 import { gatherWeekSummary } from "./pusher";
 import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
@@ -386,6 +388,94 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["name"],
     },
   },
+  {
+    name: "log_metric",
+    description:
+      "Record a numeric reading — a body measurement (weight, waist, chest), " +
+      "or a running total like calories. Call this for anything that's a " +
+      "number over time, not a yes/no habit. The habit is created automatically " +
+      "on first use, same as log_habit.\n\n" +
+      "mode matters and is only set on the FIRST log of a new metric (later " +
+      "calls ignore it, the metric keeps its original mode): " +
+      "'latest' (the default) is for a point-in-time reading, like weight or a " +
+      "measurement — each log replaces the day's value. 'sum' is for something " +
+      "that accumulates across multiple entries in a day, like calories or " +
+      "water — each log adds to the day's running total. Use 'sum' the first " +
+      "time you log a habit like calories; a single weight reading should stay " +
+      "'latest'.\n\n" +
+      "If the user describes a meal or shares a photo of one without giving an " +
+      "exact number, estimate the calories yourself from what you can see or " +
+      "read, and say in the note that it's an estimate — don't ask them to " +
+      "count calories themselves when a reasonable estimate is possible.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Short metric name, lowercase: 'weight', 'waist', 'calories'.",
+        },
+        value: { type: "number", description: "The number to log." },
+        unit: {
+          type: "string",
+          description: "e.g. 'kg', 'cm', 'kcal'. Only used the first time a metric is created.",
+        },
+        mode: {
+          type: "string",
+          enum: ["latest", "sum"],
+          description: "Only used the first time a metric is created. See above for which to pick.",
+        },
+        day: { type: "string", description: "YYYY-MM-DD. Omit for today." },
+        note: {
+          type: "string",
+          description: "Optional detail, e.g. 'lunch: chicken salad' or 'estimated from photo'.",
+        },
+      },
+      required: ["name", "value"],
+    },
+  },
+  {
+    name: "get_metric_history",
+    description:
+      "Get a metric's recent day-by-day values, current/latest reading, and " +
+      "mode. Call this for any question about how a measurement or running " +
+      "total has been trending.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "The metric name." },
+        history_days: {
+          type: "integer",
+          description: "How many recent days of history to return. Defaults to 30.",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "list_metrics",
+    description:
+      "List every tracked metric with today's value. Call this for broad " +
+      "questions — 'what am I tracking?', 'how am I doing on measurements?'.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "metric_chart",
+    description:
+      "Generate a trend-line image of a metric's recent history and attach it " +
+      "to the reply. Call this when the user asks to see, show, or visualize a " +
+      "measurement or calorie trend, rather than just hear the numbers.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "The metric name." },
+        days: {
+          type: "integer",
+          description: "How many recent days to chart. Defaults to 30.",
+        },
+      },
+      required: ["name"],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -640,6 +730,49 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const days = optionalInt(input, "days", 84);
       const png = renderHabitChart(name, days);
       const path = join(tmpdir(), `loopdog-chart-${nowUtcIso().replace(/[:.]/g, "-")}.png`);
+      await writeFile(path, png);
+      return { ok: true, path, name, days };
+    }
+
+    case "log_metric": {
+      const day = optionalStr(input, "day") ?? localDay();
+      if (!isValidDay(day)) {
+        throw new ToolError(`"day" must be YYYY-MM-DD, got "${day}"`);
+      }
+      const mode = optionalStr(input, "mode");
+      if (mode !== undefined && mode !== "latest" && mode !== "sum") {
+        throw new ToolError(`"mode" must be "latest" or "sum", got "${mode}"`);
+      }
+      return logMetric(str(input, "name"), day, num(input, "value"), {
+        unit: optionalStr(input, "unit"),
+        mode: mode as MetricMode | undefined,
+        note: optionalStr(input, "note"),
+      });
+    }
+
+    case "get_metric_history": {
+      const name = str(input, "name");
+      const history = getMetricHistory(name, optionalInt(input, "history_days", 30));
+      if (!history) {
+        const known = listMetrics().map((m) => m.name);
+        throw new ToolError(
+          known.length
+            ? `no metric called "${name}". Currently tracked: ${known.join(", ")}`
+            : `no metric called "${name}", and nothing is being tracked yet`,
+        );
+      }
+      return history;
+    }
+
+    case "list_metrics": {
+      return { metrics: listMetrics() };
+    }
+
+    case "metric_chart": {
+      const name = str(input, "name");
+      const days = optionalInt(input, "days", 30);
+      const png = renderMetricChart(name, days);
+      const path = join(tmpdir(), `loopdog-metric-chart-${nowUtcIso().replace(/[:.]/g, "-")}.png`);
       await writeFile(path, png);
       return { ok: true, path, name, days };
     }

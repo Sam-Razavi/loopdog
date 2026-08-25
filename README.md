@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with twenty-two tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with twenty-six tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -92,6 +92,10 @@ everything else.
 | `convert_currency` | Convert an amount between currencies at a live rate |
 | `get_weather` | Current conditions for the configured city, or another one named |
 | `habit_chart` | A calendar-heatmap image of a habit's recent history, as a Discord attachment |
+| `log_metric` | Record a body measurement, calorie entry, or any number over time |
+| `get_metric_history` | A metric's recent day-by-day values and current reading |
+| `list_metrics` | Everything numeric being tracked, with today's value |
+| `metric_chart` | A trend-line image of a metric's recent history, as a Discord attachment |
 
 ### Streaks
 
@@ -184,6 +188,29 @@ encoder (`src/png.ts`, `node:zlib` only), no canvas/sharp dependency: those need
 native compilation, exactly the kind of build fragility this project already hit
 once on Railway with `better-sqlite3`. No text baked into the image on purpose —
 Claude's reply carries the habit name and window, the picture stays simple.
+
+### Body measurements and calories
+
+A separate, numeric-tracking system alongside boolean habits — weight, waist,
+chest, calories, anything that's "a number over time" rather than "did I do this."
+`log_metric` picks up a `unit` (`kg`, `cm`, `kcal`, …) and a `mode` the first time
+a metric is created:
+
+- **`latest`** (the default) — a fresh reading replaces the day's value. For
+  weight, measurements, anything point-in-time.
+- **`sum`** — each entry adds to a running daily total. For calories, water,
+  anything logged multiple times a day that should add up. Claude picks this on
+  its own the first time it logs something like calories — no need to ask for it
+  explicitly.
+
+Describe a meal, or attach a photo of one, without an exact calorie count, and
+Claude estimates it — reusing the image-aware replies above rather than needing
+you to count calories yourself. It says once that it's an estimate, then treats
+it like any other logged number. Same voice rules as everything else apply here
+too: no judgment about the number, whatever it is.
+
+"Show me my weight trend" gets a real trend-line PNG (`src/linechart.ts`, same
+`png.ts` encoder as habit charts), same no-text-baked-in philosophy.
 
 ### Image-aware replies
 
@@ -402,7 +429,8 @@ src/
 ├── png.ts        minimal PNG encoder (node:zlib only, no canvas/sharp)
 ├── chart.ts      habit calendar-heatmap image, built on png.ts
 ├── imagetype.ts  sniffs an image's real format from its bytes
-└── db/           SQLite: reminders, habits, watches, conversation history
+├── linechart.ts  metric trend-line image, built on png.ts
+└── db/           SQLite: reminders, habits, metrics, watches, conversation history
 ```
 
 Inspect the database directly with `sqlite3 loopdog.sqlite`. Back-dating a few rows in

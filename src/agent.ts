@@ -33,7 +33,7 @@ export interface AgentReply {
 }
 
 // Tools whose result includes a "path" the caller should attach to the reply.
-const ATTACHMENT_TOOLS = new Set(["export_backup", "habit_chart"]);
+const ATTACHMENT_TOOLS = new Set(["export_backup", "habit_chart", "metric_chart"]);
 
 export async function respond(userText: string, images: ImageInput[] = []): Promise<AgentReply> {
   const userContent: Anthropic.MessageParam["content"] = images.length

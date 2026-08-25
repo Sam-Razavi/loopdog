@@ -82,4 +82,30 @@ CREATE TABLE IF NOT EXISTS watches (
   created_at      TEXT NOT NULL,
   last_checked_at TEXT
 );
+
+-- Numeric tracking, alongside boolean habits: body measurements, calories,
+-- anything that's "a number over time" rather than "did I do this." mode
+-- decides how same-day entries combine — 'latest' (a weight reading
+-- replaces the last one) or 'sum' (a calorie entry adds to the day's
+-- total). metric_logs is append-only either way; the mode only affects how
+-- a day's rows get aggregated when reading, not how they're written.
+CREATE TABLE IF NOT EXISTS metrics (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  unit       TEXT,                     -- e.g. "kg", "cm", "kcal" — optional, for display
+  mode       TEXT NOT NULL DEFAULT 'latest',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS metric_logs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  metric_id  INTEGER NOT NULL REFERENCES metrics(id) ON DELETE CASCADE,
+  day        TEXT NOT NULL,            -- YYYY-MM-DD, already 4am-adjusted
+  value      REAL NOT NULL,
+  note       TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_metric_logs_lookup
+  ON metric_logs(metric_id, day DESC);
 `;
