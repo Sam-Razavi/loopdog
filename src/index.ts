@@ -8,42 +8,40 @@ import {
   type Message,
 } from "discord.js";
 import { assertDiscordConfigured, config } from "./config";
-import { respond, type ImageInput, type SupportedImageType } from "./agent";
+import { respond, type ImageInput } from "./agent";
 import { migrate } from "./db";
+import { sniffImageType } from "./imagetype";
 import { startScheduler } from "./pusher";
 
 const DISCORD_LIMIT = 2000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_IMAGES = 4;
-const SUPPORTED_IMAGE_TYPES: ReadonlySet<string> = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-]);
-
-function isSupportedImageType(value: string): value is SupportedImageType {
-  return SUPPORTED_IMAGE_TYPES.has(value);
-}
 
 /**
  * Downloads any image attachments on a message and base64-encodes them for
  * Claude's vision input. Best-effort per attachment: an unsupported type, an
  * oversized file, or a failed download is skipped rather than failing the
  * whole message — one bad attachment shouldn't block a reply.
+ *
+ * The real format is sniffed from the downloaded bytes, not trusted from
+ * Discord's declared contentType — Discord's CDN can serve different bytes
+ * than the attachment metadata claims (observed live: a photo whose
+ * metadata and actual bytes disagreed), and Anthropic's API hard-rejects a
+ * media_type that doesn't match the real content.
  */
 async function extractImages(message: Message): Promise<ImageInput[]> {
   const images: ImageInput[] = [];
   for (const attachment of message.attachments.values()) {
     if (images.length >= MAX_IMAGES) break;
-    const contentType = attachment.contentType?.split(";")[0]?.trim();
-    if (!contentType || !isSupportedImageType(contentType)) continue;
+    if (!attachment.contentType?.startsWith("image/")) continue; // cheap pre-filter only
     if (attachment.size > MAX_IMAGE_BYTES) continue;
     try {
       const response = await fetch(attachment.url);
       if (!response.ok) continue;
       const buffer = Buffer.from(await response.arrayBuffer());
-      images.push({ mediaType: contentType, data: buffer.toString("base64") });
+      const mediaType = sniffImageType(buffer);
+      if (!mediaType) continue; // Claude doesn't accept whatever this actually is
+      images.push({ mediaType, data: buffer.toString("base64") });
     } catch (error) {
       console.error("[loopdog] failed to fetch image attachment:", error);
     }

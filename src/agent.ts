@@ -1,8 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config";
 import { appendTurn, recentTurns } from "./db/history";
+import type { SupportedImageType } from "./imagetype";
 import { buildSystemPrompt } from "./prompt";
 import { runTool, ToolError, TOOLS } from "./tools";
+
+export type { SupportedImageType };
 
 const MAX_TOOL_ROUNDS = 6;
 const HISTORY_TURNS = 20;
@@ -17,8 +20,6 @@ function textOf(message: Anthropic.Message): string {
     .join("\n")
     .trim();
 }
-
-export type SupportedImageType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
 export interface ImageInput {
   mediaType: SupportedImageType;

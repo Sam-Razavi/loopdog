@@ -194,6 +194,11 @@ conversation history (only a short "[N image(s) attached]" marker is), so a
 long-running conversation doesn't quietly resend old photos as context on every
 future turn.
 
+The actual image format is sniffed from the downloaded bytes (`src/imagetype.ts`),
+not trusted from Discord's declared content type — Discord's CDN can serve
+different bytes than the attachment metadata claims, and a mismatched format is a
+hard rejection from Anthropic's API, not a soft one.
+
 ### Sunday evening digest
 
 Once a week, around `LOOPDOG_DIGEST_HOUR` (default 20:00 local) on Sundays, Loopdog
@@ -396,6 +401,7 @@ src/
 ├── random.ts     real randomness for random_pick/roll_dice
 ├── png.ts        minimal PNG encoder (node:zlib only, no canvas/sharp)
 ├── chart.ts      habit calendar-heatmap image, built on png.ts
+├── imagetype.ts  sniffs an image's real format from its bytes
 └── db/           SQLite: reminders, habits, watches, conversation history
 ```
 
