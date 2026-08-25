@@ -17,6 +17,7 @@ import { getMuteUntil } from "./db/mute";
 import { listWatches, updateWatchAfterCheck } from "./db/watches";
 import { fetchReadableText } from "./webfetch";
 import * as googleCalendar from "./google";
+import * as hotmail from "./hotmail";
 import { addDays, dayOfWeek, formatLocal, inQuietHours, localDay, localHour, localInstant } from "./time";
 
 /**
@@ -298,12 +299,13 @@ async function checkPageWatches(client: Client): Promise<void> {
 }
 
 /**
- * Finishes a Google Calendar device-flow connection in the background, so
- * the user doesn't have to remember to come back and ask "did it work?" —
- * one poll attempt per tick if a code is pending. Runs even while muted:
- * this is a direct completion of something the user explicitly asked to
- * do (connect_calendar), not an unprompted nudge, so vacation mode
- * shouldn't swallow it.
+ * Finishes a Google device-flow connection in the background, so the user
+ * doesn't have to remember to come back and ask "did it work?" — one poll
+ * attempt per tick if a code is pending. Runs even while muted: this is a
+ * direct completion of something the user explicitly asked to do
+ * (connect_google), not an unprompted nudge, so vacation mode shouldn't
+ * swallow it. See checkPendingHotmailAuth below for the same thing on the
+ * separate Hotmail/Outlook connection.
  */
 async function checkPendingGoogleAuth(client: Client): Promise<void> {
   let outcome: "connected" | "expired" | "denied" | null;
@@ -329,8 +331,38 @@ async function checkPendingGoogleAuth(client: Client): Promise<void> {
   }
 }
 
+/**
+ * Same reasoning and shape as checkPendingGoogleAuth, for the separate
+ * Hotmail/Outlook connection — direct completion of an explicit
+ * connect_hotmail, not an unprompted nudge, so it runs even while muted.
+ */
+async function checkPendingHotmailAuth(client: Client): Promise<void> {
+  let outcome: "connected" | "expired" | "denied" | null;
+  try {
+    outcome = await hotmail.pollPendingConnection();
+  } catch (error) {
+    console.error("[pusher] failed to poll pending Hotmail connection:", error);
+    return;
+  }
+  if (outcome === null) return; // nothing pending, or still waiting on the user
+
+  const message =
+    outcome === "connected"
+      ? "Hotmail connected."
+      : outcome === "denied"
+        ? "Hotmail connection was declined."
+        : "Hotmail connection request expired before it was approved. Ask me to connect again.";
+  try {
+    const owner = await client.users.fetch(config.ownerId);
+    await owner.send(message);
+  } catch (error) {
+    console.error("[pusher] failed to send Hotmail connection result:", error);
+  }
+}
+
 async function tick(client: Client): Promise<void> {
   await checkPendingGoogleAuth(client);
+  await checkPendingHotmailAuth(client);
   if (getMuteUntil()) return; // vacation mode: skip every proactive DM this tick
   await checkAndPush(client);
   await checkAtRiskNudge(client);
@@ -346,7 +378,7 @@ async function tick(client: Client): Promise<void> {
  * Sunday digest, the once-daily morning brief, and watched-page change
  * alerts (each on its own, slower LOOPDOG_WATCH_INTERVAL_MINUTES cadence)
  * — all of it suppressed entirely while a vacation mute is active, except
- * finishing a Google Calendar connection the user explicitly started,
+ * finishing a Google or Hotmail connection the user explicitly started,
  * which isn't an unprompted nudge and always goes through. Runs once
  * immediately (so a restart doesn't wait a full interval to catch anything
  * that fell due while the bot was down), then on a timer at

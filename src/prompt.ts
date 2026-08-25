@@ -4,6 +4,7 @@ import { listMemories } from "./db/memories";
 import { getMuteUntil } from "./db/mute";
 import { listOverdue } from "./db/reminders";
 import { getStatus as getCalendarStatus } from "./google";
+import { getStatus as getHotmailStatus } from "./hotmail";
 import { currentOffset, formatLocal, localDay } from "./time";
 
 // Voice compass: the friend who never makes it weird. Understated, doesn't
@@ -138,6 +139,23 @@ function liveState(): string {
     );
   } else if (googleStatus === "pending") {
     lines.push(``, `A Google connection is mid-setup, waiting on the user to approve it in a browser. If asked, call connect_google to check whether it's gone through yet.`);
+  }
+
+  const hotmailStatus = getHotmailStatus();
+  if (hotmailStatus === "connected") {
+    lines.push(
+      ``,
+      `Hotmail/Outlook is connected — a separate account from Google. Its email tools (list_emails/get_email/create_email_draft) are usable directly. No send tool exists for this either.`,
+    );
+  } else if (hotmailStatus === "pending") {
+    lines.push(``, `A Hotmail/Outlook connection is mid-setup, waiting on the user to approve it in a browser. If asked, call connect_hotmail to check whether it's gone through yet.`);
+  }
+
+  if (googleStatus === "connected" && hotmailStatus === "connected") {
+    lines.push(
+      ``,
+      `Both Gmail and Hotmail are connected. list_emails/get_email/create_email_draft need "provider" set when it's not obvious which inbox is meant — infer it from context (an address ending in @hotmail.com/@outlook.com/@live.com clearly means Hotmail) or just ask, don't guess silently.`,
+    );
   }
 
   // Capped, not because this is expected to ever get huge for one person,

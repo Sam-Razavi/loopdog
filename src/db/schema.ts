@@ -130,6 +130,27 @@ CREATE TABLE IF NOT EXISTS google_auth (
   updated_at       TEXT NOT NULL
 );
 
+-- Microsoft OAuth (Hotmail/Outlook/Live, mail only): at most one row, same
+-- single-row shape as google_auth — but no client-secret column, since the
+-- device flow's public-client token exchange never sends one. 'pending'
+-- while waiting on the user to approve the device-flow code in a browser;
+-- 'connected' once real tokens are stored. HOTMAIL_CLIENT_ID is an optional
+-- env var — this table simply stays empty for anyone who never sets it up.
+CREATE TABLE IF NOT EXISTS hotmail_auth (
+  id               INTEGER PRIMARY KEY CHECK (id = 1),
+  status           TEXT NOT NULL,        -- 'pending' | 'connected'
+  device_code      TEXT,                 -- set while pending
+  user_code        TEXT,                 -- set while pending — shown to the user, re-shown on a re-check
+  verification_url TEXT,                 -- set while pending
+  poll_interval    INTEGER,              -- seconds, from Microsoft's device response
+  expires_at       TEXT,                 -- when the pending device code expires
+  access_token     TEXT,                 -- set once connected
+  refresh_token    TEXT,                 -- set once connected
+  token_expires_at TEXT,                 -- access_token's own expiry
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+
 -- Standing facts the user explicitly asked Loopdog to remember — distinct
 -- from conversation history, which only feeds the last ~20 turns into each
 -- response. Every memory here is injected into every system prompt, so

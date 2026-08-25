@@ -22,9 +22,11 @@ export interface Config {
   quietHoursEnd: number;
   city: string;
   watchIntervalMinutes: number;
-  /** Optional — Google Calendar stays unavailable (a plain ToolError on use) until both are set. */
+  /** Optional — Google Calendar/Gmail stay unavailable (a plain ToolError on use) until both are set. */
   googleClientId: string;
   googleClientSecret: string;
+  /** Optional — Hotmail/Outlook stays unavailable (a plain ToolError on use) until set. No secret: the device flow's public-client token exchange never sends one. */
+  hotmailClientId: string;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -170,6 +172,7 @@ export const config: Config = {
   watchIntervalMinutes: watchIntervalMinutes(),
   googleClientId: optional("GOOGLE_CLIENT_ID", ""),
   googleClientSecret: optional("GOOGLE_CLIENT_SECRET", ""),
+  hotmailClientId: optional("HOTMAIL_CLIENT_ID", ""),
 };
 
 function report(problems: string[], hint: string): void {

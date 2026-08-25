@@ -21,6 +21,7 @@ import { addMemory, forgetMemory, listMemories } from "./db/memories";
 import { renderHabitChart } from "./chart";
 import { renderMetricChart } from "./linechart";
 import * as googleCalendar from "./google";
+import * as hotmail from "./hotmail";
 import { gatherWeekSummary } from "./pusher";
 import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
@@ -539,23 +540,56 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "connect_hotmail",
+    description:
+      "Connect a Hotmail/Outlook/Live account (Microsoft) for email — a " +
+      "separate account and connection from Gmail; both can be connected " +
+      "at once. Call this when the user asks to connect, set up, or link " +
+      "their Hotmail or Outlook, or asks 'did it connect?' / 'is it " +
+      "connected?' after starting the process. Re-invokable and idempotent, " +
+      "same pattern as connect_google: if a connection attempt is already " +
+      "in progress, this checks it instead of starting a new one; if " +
+      "already connected, it says so. On first call it returns a short " +
+      "code and a URL — tell the user to go there and enter the code, then " +
+      "ask you to check again once they have.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "disconnect_hotmail",
+    description: "Disconnect the Hotmail/Outlook account. Doesn't affect a separate Gmail connection.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
     name: "list_emails",
     description:
-      "List or search the user's Gmail. Call this for any question about " +
-      "what's in their inbox, or to find a specific email. Fails with a " +
-      "plain error if not connected yet — tell the user to ask you to " +
-      "connect_google first. Returns sender, subject, date, and a short " +
-      "snippet for each match, not the full body — call get_email with an " +
-      "id from these results if the full content is actually needed.",
+      "List or search email — Gmail, Hotmail/Outlook, or whichever is " +
+      "connected. Call this for any question about what's in the inbox, or " +
+      "to find a specific email. Fails with a plain error if nothing's " +
+      "connected yet — tell the user to ask you to connect_google or " +
+      "connect_hotmail first. If both are connected and it's not clear " +
+      "which one the user means, this fails asking you to specify " +
+      "'provider' — ask the user, or infer it from context (an address " +
+      "ending in @hotmail.com/@outlook.com/@live.com clearly means " +
+      "Hotmail). Returns sender, subject, date, and a short snippet for " +
+      "each match, not the full body — call get_email with an id from " +
+      "these results if the full content is actually needed.",
     input_schema: {
       type: "object",
       properties: {
+        provider: {
+          type: "string",
+          enum: ["gmail", "hotmail"],
+          description:
+            "Which connected account to use. Omit if only one is connected — " +
+            "only needed when both Gmail and Hotmail are connected.",
+        },
         query: {
           type: "string",
           description:
-            "Gmail search syntax, e.g. 'is:unread', 'from:someone@example.com', " +
-            "'newer_than:7d', 'subject:invoice'. Omit for the most recent " +
-            "inbox messages.",
+            "Search terms. For Gmail this is Gmail's own search syntax, e.g. " +
+            "'is:unread', 'from:someone@example.com', 'newer_than:7d', " +
+            "'subject:invoice'. For Hotmail this is a plain-text search across " +
+            "subject/body/sender. Omit for the most recent inbox messages.",
         },
         max_results: {
           type: "integer",
@@ -575,6 +609,11 @@ export const TOOLS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         id: { type: "string", description: "The email's id, from list_emails." },
+        provider: {
+          type: "string",
+          enum: ["gmail", "hotmail"],
+          description: "Which account the id came from. Omit if only one is connected.",
+        },
       },
       required: ["id"],
     },
@@ -582,17 +621,25 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "create_email_draft",
     description:
-      "Create a Gmail draft. This is the only email tool that writes " +
-      "anything — there is no send tool, deliberately: Loopdog can compose " +
-      "an email but the user always reviews and sends it themselves from " +
-      "Gmail. Call this when the user asks to draft, write, or compose an " +
-      "email, and tell them it's sitting in Drafts once done.",
+      "Create an email draft — in Gmail, Hotmail/Outlook, or whichever the " +
+      "user means. This is the only email tool that writes anything — " +
+      "there is no send tool, deliberately: Loopdog can compose an email " +
+      "but the user always reviews and sends it themselves. Call this when " +
+      "the user asks to draft, write, or compose an email, and tell them " +
+      "it's sitting in Drafts once done.",
     input_schema: {
       type: "object",
       properties: {
         to: { type: "string", description: "Recipient email address." },
         subject: { type: "string", description: "Email subject line." },
         body: { type: "string", description: "Plain-text email body." },
+        provider: {
+          type: "string",
+          enum: ["gmail", "hotmail"],
+          description:
+            "Which connected account to draft from. Omit if only one is " +
+            "connected — only needed when both Gmail and Hotmail are connected.",
+        },
       },
       required: ["to", "subject", "body"],
     },
@@ -711,6 +758,34 @@ function stringArray(input: Record<string, unknown>, key: string): string[] {
     throw new ToolError(`"${key}" is required and must be a non-empty array of strings`);
   }
   return value;
+}
+
+type EmailProvider = "gmail" | "hotmail";
+
+/**
+ * Picks which connected email account an email tool call should use.
+ * Explicit `provider` wins; otherwise exactly one connected account picks
+ * itself. Neither connected, or both connected with no `provider` given,
+ * is a ToolError telling the model what to do next rather than guessing —
+ * same "say what went wrong, offer the obvious next step" pattern as every
+ * other tool error.
+ */
+function resolveEmailProvider(input: Record<string, unknown>): EmailProvider {
+  const requested = optionalStr(input, "provider");
+  if (requested !== undefined) {
+    if (requested !== "gmail" && requested !== "hotmail") {
+      throw new ToolError(`"provider" must be "gmail" or "hotmail", got "${requested}"`);
+    }
+    return requested;
+  }
+  const gmailOn = googleCalendar.isConnected();
+  const hotmailOn = hotmail.isConnected();
+  if (gmailOn && !hotmailOn) return "gmail";
+  if (hotmailOn && !gmailOn) return "hotmail";
+  if (!gmailOn && !hotmailOn) {
+    throw new ToolError(`no email account connected — call connect_google or connect_hotmail first, or ask the user which they want.`);
+  }
+  throw new ToolError(`both Gmail and Hotmail are connected — call again with "provider" set to whichever the user means.`);
 }
 
 export async function runTool(name: string, rawInput: unknown): Promise<unknown> {
@@ -958,17 +1033,40 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       );
     }
 
+    case "connect_hotmail": {
+      return await hotmail.connect();
+    }
+
+    case "disconnect_hotmail": {
+      return { disconnected: hotmail.disconnect() };
+    }
+
     case "list_emails": {
+      const provider = resolveEmailProvider(input);
       const maxResults = optionalInt(input, "max_results", 10);
-      return { emails: await googleCalendar.listEmails(optionalStr(input, "query"), maxResults) };
+      const query = optionalStr(input, "query");
+      const emails =
+        provider === "gmail"
+          ? await googleCalendar.listEmails(query, maxResults)
+          : await hotmail.listEmails(query, maxResults);
+      return { provider, emails };
     }
 
     case "get_email": {
-      return await googleCalendar.getEmail(str(input, "id"));
+      const provider = resolveEmailProvider(input);
+      const id = str(input, "id");
+      const email = provider === "gmail" ? await googleCalendar.getEmail(id) : await hotmail.getEmail(id);
+      return { provider, ...email };
     }
 
     case "create_email_draft": {
-      return await googleCalendar.createDraft(str(input, "to"), str(input, "subject"), str(input, "body"));
+      const provider = resolveEmailProvider(input);
+      const to = str(input, "to");
+      const subject = str(input, "subject");
+      const body = str(input, "body");
+      const draft =
+        provider === "gmail" ? await googleCalendar.createDraft(to, subject, body) : await hotmail.createDraft(to, subject, body);
+      return { provider, ...draft };
     }
 
     case "remember": {

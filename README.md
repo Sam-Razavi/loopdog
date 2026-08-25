@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with thirty-six tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with thirty-eight tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -100,9 +100,11 @@ everything else.
 | `disconnect_google` | Unlink the Google account |
 | `list_calendar_events` | Upcoming events, once connected |
 | `create_calendar_event` | Add an event to the calendar |
-| `list_emails` | List or search Gmail, once connected |
+| `connect_hotmail` | Start or check a Hotmail/Outlook connection — separate account from Google, both connectable at once |
+| `disconnect_hotmail` | Unlink the Hotmail/Outlook account |
+| `list_emails` | List or search email, from whichever of Gmail/Hotmail is connected |
 | `get_email` | Full content of one email, including body text |
-| `create_email_draft` | Create a Gmail draft — never sends, no send tool exists |
+| `create_email_draft` | Create a draft — never sends, no send tool exists for either provider |
 | `remember` | Store a standing fact — a preference, an allergy, a detail worth keeping |
 | `list_memories` | Everything currently remembered |
 | `forget` | Delete a stored memory |
@@ -322,6 +324,54 @@ carefully, but — like the very first version of the Discord bot itself —
 hasn't been exercised against a real Google account yet. The first real test
 is whoever sets up real credentials and says "connect my Google account."
 
+### Hotmail / Outlook
+
+A second, independent email account — Hotmail, Outlook.com, and Live.com are
+all Microsoft personal accounts, authenticated through Microsoft's own
+identity platform rather than Google's, so this is a fully separate
+connection with its own setup. **Both Gmail and Hotmail can be connected at
+the same time.** With only one connected, `list_emails` / `get_email` /
+`create_email_draft` just use it. With both connected, they ask (or infer
+from an @hotmail.com/@outlook.com/@live.com address) which inbox a request
+means, rather than guessing silently.
+
+Connecting uses the same OAuth **device flow** as Google, for the same
+reason — no public web server to receive a redirect on. Say "connect my
+Hotmail," and Loopdog gives you a short code and a URL
+(`microsoft.com/devicelogin`) — open that on any device, sign in, enter the
+code, and come back and ask "did it connect?" (or just wait — same
+background completion, same vacation-mute exception, as Google above).
+
+**Read + draft only, same policy as Gmail — but enforced one layer deeper.**
+There is no send tool here either, but on top of that, the OAuth scope this
+requests (`Mail.ReadWrite`) genuinely cannot send mail at the Microsoft
+Graph API level — sending requires the separate `Mail.Send` scope, which is
+simply never requested. Gmail's `gmail.compose` scope technically still
+permits sending if a send-capable call were ever made, so Gmail's guarantee
+rests entirely on "no send tool exists in the code." Hotmail's rests on
+that *and* the API refusing anyway.
+
+**Setup**, in the [Azure Portal](https://portal.azure.com/):
+
+1. **Microsoft Entra ID → App registrations → New registration.** Name it
+   anything. Under **Supported account types**, choose **"Personal Microsoft
+   accounts only."**
+2. **Authentication → Advanced settings** → set **Allow public client
+   flows** to **Yes**. No redirect URI is needed.
+3. **API permissions → Add a permission → Microsoft Graph → Delegated
+   permissions** → add `Mail.Read`, `Mail.ReadWrite`, and `offline_access`.
+   No admin-consent step — personal accounts consent for themselves the
+   first time they sign in through the device flow.
+4. Copy the **Application (client) ID** from the app's **Overview** page —
+   this is `HOTMAIL_CLIENT_ID`. No client secret is needed; the device flow
+   is a public-client flow and never sends one.
+
+Optional at boot — leave it unset and Hotmail tools just report "not set up
+yet" instead of anything breaking.
+
+**Worth knowing:** same as Google above — code-complete, reasoned through
+carefully, not yet exercised against a real Microsoft account.
+
 ### Persistent memory
 
 Ordinary conversation only reaches back about 20 messages — plenty for a chat,
@@ -474,6 +524,7 @@ transcript up top happened — no Discord app was open for any of it.
 | `LOOPDOG_WATCH_INTERVAL_MINUTES` | `60` | How often each watched page gets re-checked |
 | `GOOGLE_CLIENT_ID` | — | Optional. Enables Google Calendar + Gmail — see its section above |
 | `GOOGLE_CLIENT_SECRET` | — | Optional, paired with `GOOGLE_CLIENT_ID` |
+| `HOTMAIL_CLIENT_ID` | — | Optional. Enables Hotmail/Outlook email — see its section above. No paired secret needed |
 
 Missing variables are reported all at once at boot, by name.
 
@@ -506,6 +557,7 @@ src/
 ├── imagetype.ts  sniffs an image's real format from its bytes
 ├── linechart.ts  metric trend-line image, built on png.ts
 ├── google.ts     Google OAuth device flow + Calendar API + Gmail API (read/draft only)
+├── hotmail.ts    Microsoft OAuth device flow + Graph mail API (read/draft only)
 └── db/           SQLite: reminders, habits, metrics, memories, watches, conversation history
 ```
 
