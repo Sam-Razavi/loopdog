@@ -12,6 +12,7 @@ import { habitsAtRisk, listHabits, weeklyLogCounts, type HabitSummary } from "./
 import { hasNudgedToday, markNudged } from "./db/nudges";
 import { hasDigestedThisWeek, markDigested } from "./db/digest";
 import { hasBriefedToday, markBriefed } from "./db/morning";
+import { getMuteUntil } from "./db/mute";
 import { addDays, dayOfWeek, inQuietHours, localDay, localHour, localInstant } from "./time";
 
 /**
@@ -217,6 +218,7 @@ async function checkMorningBrief(client: Client): Promise<void> {
 }
 
 async function tick(client: Client): Promise<void> {
+  if (getMuteUntil()) return; // vacation mode: skip every proactive DM this tick
   await checkAndPush(client);
   await checkAtRiskNudge(client);
   await checkWeeklyDigest(client);
@@ -227,8 +229,9 @@ async function tick(client: Client): Promise<void> {
  * Starts the background poll for every kind of proactive DM: overdue
  * reminders (including rolling recurring ones forward, and holding off
  * during quiet hours), the once-daily at-risk habit nudge, the once-a-week
- * Sunday digest, and the once-daily morning brief. Runs once immediately (so
- * a restart doesn't wait a full interval to catch anything that fell due
+ * Sunday digest, and the once-daily morning brief — all of it suppressed
+ * entirely while a vacation mute is active. Runs once immediately (so a
+ * restart doesn't wait a full interval to catch anything that fell due
  * while the bot was down), then on a timer at LOOPDOG_PUSH_INTERVAL_MINUTES —
  * fine-grained enough to also catch "has the nudge/digest/brief hour
  * arrived" without extra timers.

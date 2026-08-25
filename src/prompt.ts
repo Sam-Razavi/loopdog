@@ -1,5 +1,6 @@
 import { config } from "./config";
 import { habitsAtRisk } from "./db/habits";
+import { getMuteUntil } from "./db/mute";
 import { listOverdue } from "./db/reminders";
 import { currentOffset, formatLocal, localDay } from "./time";
 
@@ -103,6 +104,14 @@ function liveState(): string {
       `Live streaks with nothing logged yet today:`,
       ...atRisk.map((h) => `  - ${h.name} (${h.current_streak} days)`),
       `Worth a passing mention if the conversation gives you an opening. Do not bring it up twice.`,
+    );
+  }
+
+  const muteUntil = getMuteUntil();
+  if (muteUntil) {
+    lines.push(
+      ``,
+      `Proactive DMs (pushes, nudges, digest, morning brief) are muted until ${formatLocal(new Date(muteUntil))}. Conversation itself is unaffected. Only mention this if asked about it — don't bring it up unprompted.`,
     );
   }
 

@@ -12,8 +12,9 @@ import {
   type ReminderStatus,
 } from "./db/reminders";
 import { getHabitDetail, listHabits, logHabit, unlogHabit } from "./db/habits";
+import { clearMute, setMute } from "./db/mute";
 import { gatherWeekSummary } from "./pusher";
-import { isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
+import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
 import { ToolError } from "./errors";
 
 export { ToolError };
@@ -226,6 +227,35 @@ export const TOOLS: Anthropic.Tool[] = [
       "to download their data — not routinely.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
+  {
+    name: "set_mute",
+    description:
+      "Pause all proactive DMs — reminder pushes, the at-risk nudge, the Sunday " +
+      "digest, the morning brief — until a given time. Call this when the user " +
+      "asks not to be nudged or bothered for a while: 'mute for a week', 'don't " +
+      "nudge me until Friday', 'I'm traveling until the 30th, leave me alone " +
+      "till then'. Conversation still works as normal while muted — this only " +
+      "stops proactive DMs.",
+    input_schema: {
+      type: "object",
+      properties: {
+        until: {
+          type: "string",
+          description:
+            "When the mute lifts, as ISO-8601 with an explicit UTC offset, same " +
+            "format as create_reminder's due_at.",
+        },
+      },
+      required: ["until"],
+    },
+  },
+  {
+    name: "clear_mute",
+    description:
+      "Resume proactive DMs immediately. Call when the user says they're back, " +
+      "or wants nudges again before a mute would naturally expire.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -381,6 +411,16 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const path = join(tmpdir(), `loopdog-backup-${nowUtcIso().replace(/[:.]/g, "-")}.sqlite`);
       await backupDatabase(path);
       return { ok: true, path };
+    }
+
+    case "set_mute": {
+      const untilUtc = toUtcIso(str(input, "until"));
+      setMute(untilUtc);
+      return { until: untilUtc, until_local: formatLocal(new Date(untilUtc)) };
+    }
+
+    case "clear_mute": {
+      return { cleared: clearMute() };
     }
 
     default:

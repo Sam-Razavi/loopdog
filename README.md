@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with eleven tools attached. Claude
+Every message goes to Claude (`claude-sonnet-5`) with thirteen tools attached. Claude
 decides what to call and what to say; the bot is a thin harness around that loop.
 State lives in a local SQLite file, so everything survives a restart.
 
@@ -72,6 +72,8 @@ State lives in a local SQLite file, so everything survives a restart.
 | `list_habits` | Everything tracked, with streaks |
 | `week_summary` | Days logged and reminders done/pending over the last 7 days, on demand |
 | `export_backup` | Send the live database as a Discord file attachment |
+| `set_mute` | Pause every proactive DM until a given time |
+| `clear_mute` | Resume proactive DMs early |
 
 ### Streaks
 
@@ -114,6 +116,16 @@ Once a day, around `LOOPDOG_MORNING_BRIEF_HOUR` (default 08:00 local), Loopdog s
 one DM gathering what's due today and what's at risk into a single message, instead
 of it trickling in separately throughout the day. If there's genuinely nothing due
 and nothing at risk, it stays quiet. Fires at most once per day.
+
+### Vacation / mute mode
+
+"Mute for a week" or "don't nudge me until the 30th" pauses every proactive DM —
+the reminder push, the at-risk nudge, the digest, the morning brief — until the
+time you gave, then resumes on its own with no extra step. Nothing is lost while
+muted: reminders and at-risk habits just accumulate normally and get caught up
+the moment it lifts. Talking to the bot still works exactly as normal the whole
+time — mute only affects what it sends you unprompted. Say "unmute me" to end it
+early.
 
 ### At-risk nudge
 
@@ -309,7 +321,7 @@ src/
 ├── index.ts      Discord client, owner gate, message routing
 ├── repl.ts       terminal chat harness — same agent loop, no Discord
 ├── agent.ts      the Claude tool-use loop
-├── pusher.ts     background poll: reminder pushes, at-risk nudge, digest, morning brief
+├── pusher.ts     background poll: reminder pushes, at-risk nudge, digest, morning brief, mute gate
 ├── prompt.ts     personality + live state injected each turn
 ├── tools.ts      tool schemas and dispatch
 ├── streak.ts     streak rules (pure, unit-tested)

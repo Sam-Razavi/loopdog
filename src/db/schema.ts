@@ -64,4 +64,11 @@ CREATE TABLE IF NOT EXISTS morning_briefs (
   day     TEXT PRIMARY KEY,            -- YYYY-MM-DD, 4am-adjusted local day
   sent_at TEXT NOT NULL
 );
+
+-- Vacation/mute mode: at most one row. Its presence (and until being in the
+-- future) means every proactive DM is suppressed until that instant.
+CREATE TABLE IF NOT EXISTS mute (
+  id    INTEGER PRIMARY KEY CHECK (id = 1),
+  until TEXT NOT NULL                  -- UTC ISO-8601; mute lifts here
+);
 `;
