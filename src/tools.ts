@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
@@ -15,6 +16,7 @@ import {
 import { getHabitDetail, listHabits, logHabit, unlogHabit } from "./db/habits";
 import { clearMute, setMute } from "./db/mute";
 import { createWatch, deleteWatch, listWatches } from "./db/watches";
+import { renderHabitChart } from "./chart";
 import { gatherWeekSummary } from "./pusher";
 import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
@@ -366,6 +368,24 @@ export const TOOLS: Anthropic.Tool[] = [
       required: [],
     },
   },
+  {
+    name: "habit_chart",
+    description:
+      "Generate a calendar-heatmap image of a habit's recent history and " +
+      "attach it to the reply. Call this when the user asks to see, show, or " +
+      "visualize a streak or habit history, rather than just hear the numbers.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "The habit name." },
+        days: {
+          type: "integer",
+          description: "How many recent days to chart. Defaults to 84 (12 weeks).",
+        },
+      },
+      required: ["name"],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -613,6 +633,15 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "get_weather": {
       return await getWeather(optionalStr(input, "city"));
+    }
+
+    case "habit_chart": {
+      const name = str(input, "name");
+      const days = optionalInt(input, "days", 84);
+      const png = renderHabitChart(name, days);
+      const path = join(tmpdir(), `loopdog-chart-${nowUtcIso().replace(/[:.]/g, "-")}.png`);
+      await writeFile(path, png);
+      return { ok: true, path, name, days };
     }
 
     default:

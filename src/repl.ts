@@ -6,6 +6,10 @@
  * This exists so personality and tool-calling behavior can be tested the
  * moment an API key is available, without a bot invite, a token, or a
  * running Discord client.
+ *
+ * One gap: image input. respond() supports it (Discord attachments get
+ * passed through), but there's no plain-text way to attach a local image
+ * file from a terminal readline loop, so this never exercises that path.
  */
 import * as readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";

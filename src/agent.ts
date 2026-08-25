@@ -18,13 +18,35 @@ function textOf(message: Anthropic.Message): string {
     .trim();
 }
 
+export type SupportedImageType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+export interface ImageInput {
+  mediaType: SupportedImageType;
+  data: string; // base64
+}
+
 export interface AgentReply {
   text: string;
-  /** Path to a backup file to attach, when export_backup was called this turn. */
+  /** Path to a file to attach, when a tool like export_backup/habit_chart ran this turn. */
   attachment?: string;
 }
 
-export async function respond(userText: string): Promise<AgentReply> {
+// Tools whose result includes a "path" the caller should attach to the reply.
+const ATTACHMENT_TOOLS = new Set(["export_backup", "habit_chart"]);
+
+export async function respond(userText: string, images: ImageInput[] = []): Promise<AgentReply> {
+  const userContent: Anthropic.MessageParam["content"] = images.length
+    ? [
+        { type: "text", text: userText },
+        ...images.map(
+          (image): Anthropic.ImageBlockParam => ({
+            type: "image",
+            source: { type: "base64", media_type: image.mediaType, data: image.data },
+          }),
+        ),
+      ]
+    : userText;
+
   const messages: Anthropic.MessageParam[] = [
     ...recentTurns(HISTORY_TURNS).map(
       (turn): Anthropic.MessageParam => ({
@@ -32,7 +54,7 @@ export async function respond(userText: string): Promise<AgentReply> {
         content: turn.content,
       }),
     ),
-    { role: "user", content: userText },
+    { role: "user", content: userContent },
   ];
 
   // Built once per response so overdue reminders are consistent across the
@@ -77,7 +99,7 @@ export async function respond(userText: string): Promise<AgentReply> {
       try {
         const result = await runTool(block.name, block.input);
         if (
-          block.name === "export_backup" &&
+          ATTACHMENT_TOOLS.has(block.name) &&
           typeof result === "object" &&
           result !== null &&
           "path" in result
@@ -111,7 +133,13 @@ export async function respond(userText: string): Promise<AgentReply> {
 
   if (!reply) reply = "Nothing to say to that, apparently. Try again?";
 
-  appendTurn("user", userText);
+  // Persist only text — an attached image's bytes never enter history, so a
+  // years-long conversation never re-sends old image data on every future
+  // turn. A short marker keeps the fact that one was shared, for context.
+  const persistedText = images.length
+    ? `${userText} [${images.length} image${images.length === 1 ? "" : "s"} attached]`
+    : userText;
+  appendTurn("user", persistedText);
   appendTurn("assistant", reply);
   return { text: reply, attachment };
 }

@@ -8,11 +8,48 @@ import {
   type Message,
 } from "discord.js";
 import { assertDiscordConfigured, config } from "./config";
-import { respond } from "./agent";
+import { respond, type ImageInput, type SupportedImageType } from "./agent";
 import { migrate } from "./db";
 import { startScheduler } from "./pusher";
 
 const DISCORD_LIMIT = 2000;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGES = 4;
+const SUPPORTED_IMAGE_TYPES: ReadonlySet<string> = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+
+function isSupportedImageType(value: string): value is SupportedImageType {
+  return SUPPORTED_IMAGE_TYPES.has(value);
+}
+
+/**
+ * Downloads any image attachments on a message and base64-encodes them for
+ * Claude's vision input. Best-effort per attachment: an unsupported type, an
+ * oversized file, or a failed download is skipped rather than failing the
+ * whole message — one bad attachment shouldn't block a reply.
+ */
+async function extractImages(message: Message): Promise<ImageInput[]> {
+  const images: ImageInput[] = [];
+  for (const attachment of message.attachments.values()) {
+    if (images.length >= MAX_IMAGES) break;
+    const contentType = attachment.contentType?.split(";")[0]?.trim();
+    if (!contentType || !isSupportedImageType(contentType)) continue;
+    if (attachment.size > MAX_IMAGE_BYTES) continue;
+    try {
+      const response = await fetch(attachment.url);
+      if (!response.ok) continue;
+      const buffer = Buffer.from(await response.arrayBuffer());
+      images.push({ mediaType: contentType, data: buffer.toString("base64") });
+    } catch (error) {
+      console.error("[loopdog] failed to fetch image attachment:", error);
+    }
+  }
+  return images;
+}
 
 /** Discord hard-caps messages at 2000 characters; split on paragraph or line. */
 function chunk(text: string): string[] {
@@ -33,17 +70,18 @@ function chunk(text: string): string[] {
   return chunks;
 }
 
+/**
+ * Null means "not applicable" (a guild message with no mention) — ignore
+ * entirely, regardless of attachments. An empty string means "applicable,
+ * but no text" — still worth responding to if there's an image attached.
+ */
 function extractPrompt(message: Message, botId: string): string | null {
   const isDirect = message.channel.type === ChannelType.DM;
 
   // In a server, only respond when actually mentioned.
   if (!isDirect && !message.mentions.users.has(botId)) return null;
 
-  const text = message.content
-    .replace(new RegExp(`<@!?${botId}>`, "g"), "")
-    .trim();
-
-  return text || null;
+  return message.content.replace(new RegExp(`<@!?${botId}>`, "g"), "").trim();
 }
 
 /**
@@ -116,11 +154,14 @@ async function main(): Promise<void> {
     if (!botId) return;
 
     const prompt = extractPrompt(message, botId);
-    if (!prompt) return;
+    if (prompt === null) return;
+
+    const images = await extractImages(message);
+    if (!prompt && images.length === 0) return;
 
     try {
       if (message.channel.isSendable()) await message.channel.sendTyping();
-      const { text, attachment } = await respond(prompt);
+      const { text, attachment } = await respond(prompt || "(no caption)", images);
       const parts = chunk(text);
       for (let i = 0; i < parts.length; i++) {
         const part = parts[i]!;

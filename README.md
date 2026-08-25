@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with twenty-one tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with twenty-two tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -91,6 +91,7 @@ everything else.
 | `roll_dice` | Roll dice, or flip a coin (sides: 2) |
 | `convert_currency` | Convert an amount between currencies at a live rate |
 | `get_weather` | Current conditions for the configured city, or another one named |
+| `habit_chart` | A calendar-heatmap image of a habit's recent history, as a Discord attachment |
 
 ### Streaks
 
@@ -174,6 +175,24 @@ Real randomness (`crypto.randomInt`, not a guess) for "flip a coin," "roll two
 d20," or "pick one of these for me." Live currency conversion off an actual
 exchange rate. Current weather for `LOOPDOG_CITY` (default Stockholm) or any city
 named on the spot.
+
+### Habit charts
+
+"Show me my reading streak" gets an actual calendar-heatmap image — a real PNG,
+sent as a Discord attachment — not just the numbers read out. Hand-rolled PNG
+encoder (`src/png.ts`, `node:zlib` only), no canvas/sharp dependency: those need
+native compilation, exactly the kind of build fragility this project already hit
+once on Railway with `better-sqlite3`. No text baked into the image on purpose —
+Claude's reply carries the habit name and window, the picture stays simple.
+
+### Image-aware replies
+
+Attach a photo to a DM — a meal, a workout, a screenshot, anything — and Loopdog
+actually looks at it; Claude's vision, not a caption guess. Works alongside
+whatever text comes with it, or on its own. The image itself is never written to
+conversation history (only a short "[N image(s) attached]" marker is), so a
+long-running conversation doesn't quietly resend old photos as context on every
+future turn.
 
 ### Sunday evening digest
 
@@ -375,6 +394,8 @@ src/
 ├── webfetch.ts   fetch + HTML-to-text extraction (fetch_url, watch_page)
 ├── weather.ts    Open-Meteo geocoding + forecast
 ├── random.ts     real randomness for random_pick/roll_dice
+├── png.ts        minimal PNG encoder (node:zlib only, no canvas/sharp)
+├── chart.ts      habit calendar-heatmap image, built on png.ts
 └── db/           SQLite: reminders, habits, watches, conversation history
 ```
 
