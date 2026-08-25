@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with ten tools attached. Claude
+Every message goes to Claude (`claude-sonnet-5`) with eleven tools attached. Claude
 decides what to call and what to say; the bot is a thin harness around that loop.
 State lives in a local SQLite file, so everything survives a restart.
 
@@ -70,6 +70,7 @@ State lives in a local SQLite file, so everything survives a restart.
 | `undo_habit_log` | Un-log a habit for a day — for a mis-logged entry |
 | `get_habit_streak` | Current streak, best ever, and recent day-by-day history |
 | `list_habits` | Everything tracked, with streaks |
+| `week_summary` | Days logged and reminders done/pending over the last 7 days, on demand |
 | `export_backup` | Send the live database as a Discord file attachment |
 
 ### Streaks
@@ -77,7 +78,9 @@ State lives in a local SQLite file, so everything survives a restart.
 One grace day. Miss a day and the streak holds but is flagged at risk; miss two in a
 row and it resets. Your best-ever streak is never reset. Milestones at 7, 30 and 100
 days are computed in SQL, not by the model, so it can't decide 31 days feels
-worth celebrating.
+worth celebrating. The moment a streak quietly outlasts its own previous record —
+day 18 when the record was 17 — that gets a one-line callout too, same treatment
+as a milestone, computed the same way.
 
 ### The 4am rule
 
@@ -96,6 +99,22 @@ the next time you talk to the bot about anything, then answers what you actually
 asked. The push firing doesn't stop the conversational nudge — that's intentional,
 not a bug.
 
+### Quiet hours
+
+A reminder due at 3am used to push at 3am. By default, anything falling due between
+`LOOPDOG_QUIET_HOURS_START` and `LOOPDOG_QUIET_HOURS_END` (23:00–07:00 local) holds
+until the window ends instead of pushing immediately — nothing is dropped, it just
+waits. This only gates the reminder push; the at-risk nudge, digest, and morning
+brief already fire at a single hour you choose, which is its own quiet-hours
+preference. Set both variables to the same value to turn it off entirely.
+
+### Morning brief
+
+Once a day, around `LOOPDOG_MORNING_BRIEF_HOUR` (default 08:00 local), Loopdog sends
+one DM gathering what's due today and what's at risk into a single message, instead
+of it trickling in separately throughout the day. If there's genuinely nothing due
+and nothing at risk, it stays quiet. Fires at most once per day.
+
 ### At-risk nudge
 
 Once a day, around `LOOPDOG_AT_RISK_NUDGE_HOUR` (default 21:00 local), Loopdog checks
@@ -111,6 +130,10 @@ current streak, plus how many reminders you completed and how many are still ope
 Composed the same deterministic way as the push and nudge messages — no extra API
 call, nothing that can read oddly on an unattended message. Fires at most once
 a week, even if the bot restarts partway through Sunday.
+
+The same numbers are available on demand too — "how's this week going?" any other
+day gets a live answer built from the same data, phrased by Claude rather than the
+fixed digest template, since there's an actual conversation to phrase it into.
 
 ### Recurring reminders
 
@@ -223,6 +246,9 @@ unless it lives on a persistent Volume.
    LOOPDOG_PUSH_INTERVAL_MINUTES=5
    LOOPDOG_AT_RISK_NUDGE_HOUR=21
    LOOPDOG_DIGEST_HOUR=20
+   LOOPDOG_MORNING_BRIEF_HOUR=8
+   LOOPDOG_QUIET_HOURS_START=23
+   LOOPDOG_QUIET_HOURS_END=7
    ```
    `LOOPDOG_DB` has to point inside the volume's mount path (`/data`) —
    that's the whole trick. Everywhere else it can stay as the `./loopdog.sqlite`
@@ -262,6 +288,9 @@ transcript up top happened — no Discord app was open for any of it.
 | `LOOPDOG_PUSH_INTERVAL_MINUTES` | `5` | How often it checks for newly-overdue reminders to DM you about |
 | `LOOPDOG_AT_RISK_NUDGE_HOUR` | `21` | Local hour it checks for live streaks with nothing logged today. Fires at most once a day |
 | `LOOPDOG_DIGEST_HOUR` | `20` | Local hour the Sunday weekly digest goes out. Fires at most once a week |
+| `LOOPDOG_MORNING_BRIEF_HOUR` | `8` | Local hour the morning brief goes out. Fires at most once a day |
+| `LOOPDOG_QUIET_HOURS_START` | `23` | Reminders falling due after this local hour hold until `..._END`. Equal to `..._END` disables it |
+| `LOOPDOG_QUIET_HOURS_END` | `7` | Local hour quiet hours end and held-back reminders push |
 
 Missing variables are reported all at once at boot, by name.
 
@@ -280,7 +309,7 @@ src/
 ├── index.ts      Discord client, owner gate, message routing
 ├── repl.ts       terminal chat harness — same agent loop, no Discord
 ├── agent.ts      the Claude tool-use loop
-├── pusher.ts     background poll: reminder pushes, at-risk nudge, weekly digest
+├── pusher.ts     background poll: reminder pushes, at-risk nudge, digest, morning brief
 ├── prompt.ts     personality + live state injected each turn
 ├── tools.ts      tool schemas and dispatch
 ├── streak.ts     streak rules (pure, unit-tested)

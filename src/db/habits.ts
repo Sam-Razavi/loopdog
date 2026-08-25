@@ -21,6 +21,8 @@ export interface LogResult extends StreakInfo {
   already_logged: boolean;
   /** 7, 30 or 100 the moment the streak reaches it; null otherwise. */
   milestone: number | null;
+  /** True the moment the current streak first exceeds its own previous best. */
+  personal_best: boolean;
 }
 
 function findHabit(name: string): { id: number; name: string } | undefined {
@@ -50,6 +52,12 @@ function loggedDays(habitId: number): string[] {
 
 export function logHabit(name: string, day: string, note?: string): LogResult {
   const habit = ensureHabit(name);
+  // Captured before the insert: the best run that existed *before* today, so
+  // a personal best can be detected as "the new streak exceeds that" rather
+  // than the trivially-true "current equals longest" (which is also true on
+  // a brand-new habit's very first day).
+  const before = computeStreak(loggedDays(habit.id), localDay());
+
   const result = getDb()
     .prepare(
       `INSERT OR IGNORE INTO habit_logs (habit_id, day, note, created_at)
@@ -68,12 +76,16 @@ export function logHabit(name: string, day: string, note?: string): LogResult {
       ? streak.current_streak
       : null;
 
+  const personalBest =
+    !alreadyLogged && before.longest_streak > 0 && streak.current_streak > before.longest_streak;
+
   return {
     ...streak,
     name: habit.name,
     day,
     already_logged: alreadyLogged,
     milestone,
+    personal_best: personalBest,
   };
 }
 

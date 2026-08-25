@@ -57,4 +57,11 @@ CREATE TABLE IF NOT EXISTS digests (
   week    TEXT PRIMARY KEY,            -- the local Sunday's date, YYYY-MM-DD
   sent_at TEXT NOT NULL
 );
+
+-- One row per day the morning brief has already fired for (or been
+-- evaluated with nothing to say). Same brand-new-table reasoning as digests.
+CREATE TABLE IF NOT EXISTS morning_briefs (
+  day     TEXT PRIMARY KEY,            -- YYYY-MM-DD, 4am-adjusted local day
+  sent_at TEXT NOT NULL
+);
 `;

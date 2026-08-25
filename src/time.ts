@@ -134,20 +134,19 @@ export function localTimeOfDay(instant: Date = new Date()): {
 }
 
 /**
- * Advances an instant by whole calendar days while preserving its local
- * wall-clock time — used to roll a recurring reminder's due_at forward. Naive
- * "+24h in UTC" arithmetic drifts the local time-of-day across a DST
- * transition; this instead re-derives the correct UTC offset for the new
- * date, the same reasoning toUtcIso() already asks Claude to apply manually
- * when it creates a reminder, done here in code for the automatic rollover.
+ * The UTC instant for a specific local day + wall-clock time, correcting for
+ * whatever offset that date observes. Naive "+24h in UTC" arithmetic drifts
+ * the local time-of-day across a DST transition; this instead re-derives the
+ * correct offset for the target date, the same reasoning toUtcIso() already
+ * asks Claude to apply manually when it creates a reminder, done here in
+ * code for anything computed server-side (a recurring reminder's rollover,
+ * the morning brief's "due today" cutoff).
  */
-export function advanceLocalInstant(instant: Date, days: number): Date {
-  const { day, hour, minute } = localTimeOfDay(instant);
-  const nextDay = addDays(day, days);
+export function localInstant(day: string, hour: number, minute: number): Date {
   const pad = (n: number) => String(n).padStart(2, "0");
   // Guess the instant as if the local wall-clock time were UTC, then correct
   // by whatever offset is in effect on that date.
-  const guess = new Date(`${nextDay}T${pad(hour)}:${pad(minute)}:00Z`);
+  const guess = new Date(`${day}T${pad(hour)}:${pad(minute)}:00Z`);
   const offset = currentOffset(guess);
   const sign = offset.startsWith("-") ? 1 : -1;
   const [offHour, offMinute] = offset.slice(1).split(":").map(Number) as [number, number];
@@ -155,7 +154,34 @@ export function advanceLocalInstant(instant: Date, days: number): Date {
   return new Date(guess.getTime() + sign * offsetMs);
 }
 
+/**
+ * Advances an instant by whole calendar days while preserving its local
+ * wall-clock time — used to roll a recurring reminder's due_at forward.
+ */
+export function advanceLocalInstant(instant: Date, days: number): Date {
+  const { day, hour, minute } = localTimeOfDay(instant);
+  return localInstant(addDays(day, days), hour, minute);
+}
+
 /** 0 = Sunday … 6 = Saturday, for a YYYY-MM-DD day string. */
 export function dayOfWeek(day: string): number {
   return new Date(`${day}T00:00:00Z`).getUTCDay();
+}
+
+/**
+ * Whether `instant` falls inside the quiet-hours window (local time) — used
+ * to hold a reminder push until morning instead of firing the moment it
+ * falls due. Handles a window spanning midnight (the default, 23-7). Equal
+ * start/end disables the feature entirely. start/end default to config but
+ * take explicit overrides so this is testable without depending on
+ * process-wide env state.
+ */
+export function inQuietHours(
+  instant: Date = new Date(),
+  start: number = config.quietHoursStart,
+  end: number = config.quietHoursEnd,
+): boolean {
+  if (start === end) return false;
+  const hour = localHour(instant);
+  return start < end ? hour >= start && hour < end : hour >= start || hour < end;
 }

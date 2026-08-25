@@ -11,7 +11,8 @@ import {
 import { habitsAtRisk, listHabits, weeklyLogCounts, type HabitSummary } from "./db/habits";
 import { hasNudgedToday, markNudged } from "./db/nudges";
 import { hasDigestedThisWeek, markDigested } from "./db/digest";
-import { addDays, dayOfWeek, localDay, localHour } from "./time";
+import { hasBriefedToday, markBriefed } from "./db/morning";
+import { addDays, dayOfWeek, inQuietHours, localDay, localHour, localInstant } from "./time";
 
 /**
  * Composed server-side, deliberately, not through Claude — same reasoning as
@@ -48,6 +49,11 @@ export function formatAtRiskNudge(habits: HabitSummary[]): string {
 }
 
 async function checkAndPush(client: Client): Promise<void> {
+  // Holds until quiet hours end; nothing is marked notified in the meantime,
+  // so the same reminders push on the first tick after the window closes —
+  // the same retry-on-next-tick behavior already used for a failed send.
+  if (inQuietHours()) return;
+
   const overdue = listUnnotifiedOverdue();
   if (overdue.length === 0) return;
 
@@ -94,15 +100,44 @@ async function checkAtRiskNudge(client: Client): Promise<void> {
   }
 }
 
+export interface WeeklyHabitStat extends HabitSummary {
+  /** Days logged in the last 7. */
+  days_logged: number;
+}
+
 /**
- * Same composition philosophy as the other two formatters — deterministic,
- * no LLM call, predictable over flourish for an unattended weekly message.
+ * Gathers the same week-in-review data both the automatic Sunday digest and
+ * the on-demand week_summary tool need. Kept separate from formatting: the
+ * digest DM composes this deterministically (below), while the tool hands
+ * the raw numbers to Claude to phrase in voice — same split already used
+ * throughout (list_habits/get_habit_streak return raw data; the push/nudge
+ * formatters exist only because there's no live Claude turn to phrase an
+ * unattended message).
+ */
+export function gatherWeekSummary(): {
+  habits: WeeklyHabitStat[];
+  remindersCompleted: number;
+  remindersPending: number;
+} {
+  const counts = weeklyLogCounts();
+  const habits = listHabits().map((h) => ({ ...h, days_logged: counts.get(h.name) ?? 0 }));
+  const today = localDay();
+  const weekAgoUtc = new Date(`${addDays(today, -6)}T00:00:00Z`).toISOString();
+  return {
+    habits,
+    remindersCompleted: countCompletedSince(weekAgoUtc),
+    remindersPending: listReminders({ status: "pending", limit: 1000 }).length,
+  };
+}
+
+/**
+ * Same composition philosophy as the other formatters — deterministic, no
+ * LLM call, predictable over flourish for an unattended weekly message.
  * Unlike the push/nudge formatters, a fully quiet week (zero habits, zero
  * completions) still sends: worth naming, not skipping.
  */
 export function formatDigest(
-  habits: HabitSummary[],
-  weekCounts: Map<string, number>,
+  habits: WeeklyHabitStat[],
   remindersCompleted: number,
   remindersPending: number,
 ): string {
@@ -111,8 +146,7 @@ export function formatDigest(
     lines.push(`  - nothing tracked yet`);
   } else {
     for (const habit of habits) {
-      const days = weekCounts.get(habit.name) ?? 0;
-      lines.push(`  - ${habit.name}: ${days}/7, streak at ${habit.current_streak}`);
+      lines.push(`  - ${habit.name}: ${habit.days_logged}/7, streak at ${habit.current_streak}`);
     }
   }
   lines.push(
@@ -130,18 +164,55 @@ async function checkWeeklyDigest(client: Client): Promise<void> {
 
   try {
     const owner = await client.users.fetch(config.ownerId);
-    const weekAgoUtc = new Date(`${addDays(today, -6)}T00:00:00Z`).toISOString();
-    const message = formatDigest(
-      listHabits(),
-      weeklyLogCounts(),
-      countCompletedSince(weekAgoUtc),
-      listReminders({ status: "pending", limit: 1000 }).length,
-    );
+    const data = gatherWeekSummary();
+    const message = formatDigest(data.habits, data.remindersCompleted, data.remindersPending);
     await owner.send(message);
     markDigested(today); // only after the send actually succeeds
   } catch (error) {
     console.error("[pusher] failed to send weekly digest:", error);
-    // not marked — retried next tick, same semantics as the other two checks
+    // not marked — retried next tick, same semantics as the other checks
+  }
+}
+
+/** Same composition philosophy as the other formatters — deterministic, no LLM call. */
+export function formatMorningBrief(reminders: ReminderView[], atRisk: HabitSummary[]): string {
+  if (reminders.length === 0 && atRisk.length === 0) {
+    throw new Error("formatMorningBrief called with nothing to say");
+  }
+  const lines: string[] = [];
+  if (reminders.length) {
+    lines.push(`Due today:`, ...reminders.map((r) => `  - ${r.text} (${r.due_local})`));
+  }
+  if (atRisk.length) {
+    lines.push(`At risk:`, ...atRisk.map((h) => `  - ${h.name} (${h.current_streak} days)`));
+  }
+  return lines.join("\n");
+}
+
+async function checkMorningBrief(client: Client): Promise<void> {
+  const today = localDay();
+  if (localHour() < config.morningBriefHour) return;
+  if (hasBriefedToday(today)) return;
+
+  const dueToday = listReminders({
+    status: "pending",
+    dueBefore: localInstant(addDays(today, 1), config.dayCutoffHour, 0).toISOString(),
+  });
+  const atRisk = habitsAtRisk();
+  if (dueToday.length === 0 && atRisk.length === 0) {
+    // Nothing to say this morning — mark handled, same "stay quiet" pattern
+    // the at-risk nudge already uses for an empty result.
+    markBriefed(today);
+    return;
+  }
+
+  try {
+    const owner = await client.users.fetch(config.ownerId);
+    await owner.send(formatMorningBrief(dueToday, atRisk));
+    markBriefed(today); // only after the send actually succeeds
+  } catch (error) {
+    console.error("[pusher] failed to send morning brief:", error);
+    // not marked — retried next tick, same semantics as the other checks
   }
 }
 
@@ -149,16 +220,18 @@ async function tick(client: Client): Promise<void> {
   await checkAndPush(client);
   await checkAtRiskNudge(client);
   await checkWeeklyDigest(client);
+  await checkMorningBrief(client);
 }
 
 /**
  * Starts the background poll for every kind of proactive DM: overdue
- * reminders (including rolling recurring ones forward), the once-daily
- * at-risk habit nudge, and the once-a-week Sunday digest. Runs once
- * immediately (so a restart doesn't wait a full interval to catch anything
- * that fell due while the bot was down), then on a timer at
- * LOOPDOG_PUSH_INTERVAL_MINUTES — fine-grained enough to also catch "has the
- * nudge/digest hour arrived" without extra timers.
+ * reminders (including rolling recurring ones forward, and holding off
+ * during quiet hours), the once-daily at-risk habit nudge, the once-a-week
+ * Sunday digest, and the once-daily morning brief. Runs once immediately (so
+ * a restart doesn't wait a full interval to catch anything that fell due
+ * while the bot was down), then on a timer at LOOPDOG_PUSH_INTERVAL_MINUTES —
+ * fine-grained enough to also catch "has the nudge/digest/brief hour
+ * arrived" without extra timers.
  */
 export function startScheduler(client: Client): void {
   const intervalMs = config.pushIntervalMinutes * 60_000;

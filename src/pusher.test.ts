@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatAtRiskNudge, formatDigest, formatPushMessage } from "./pusher";
-import type { ReminderView } from "./db/reminders";
+import { formatAtRiskNudge, formatDigest, formatMorningBrief, formatPushMessage } from "./pusher";
+import type { WeeklyHabitStat } from "./pusher";
+import type { ReminderView, Recurrence } from "./db/reminders";
 import type { HabitSummary } from "./db/habits";
 
 function reminder(overrides: Partial<ReminderView> = {}): ReminderView {
@@ -12,6 +13,7 @@ function reminder(overrides: Partial<ReminderView> = {}): ReminderView {
     due_local: "Wednesday, 12 August 2026 at 09:00",
     overdue: true,
     completed_at: null,
+    recurrence: null as Recurrence | null,
     ...overrides,
   };
 }
@@ -25,6 +27,10 @@ function habit(overrides: Partial<HabitSummary> = {}): HabitSummary {
     last_logged: "2026-08-10",
     ...overrides,
   };
+}
+
+function weeklyHabit(overrides: Partial<WeeklyHabitStat> = {}): WeeklyHabitStat {
+  return { ...habit(), days_logged: 0, ...overrides };
 }
 
 test("zero reminders is a programming error, not a message", () => {
@@ -77,13 +83,9 @@ test("several at-risk habits become a short list", () => {
 test("digest with habits and reminders lists a line per habit plus a reminder summary", () => {
   const message = formatDigest(
     [
-      habit({ name: "reading", current_streak: 12, at_risk: false }),
-      habit({ name: "gym", current_streak: 0, at_risk: false }),
+      weeklyHabit({ name: "reading", current_streak: 12, at_risk: false, days_logged: 6 }),
+      weeklyHabit({ name: "gym", current_streak: 0, at_risk: false, days_logged: 2 }),
     ],
-    new Map([
-      ["reading", 6],
-      ["gym", 2],
-    ]),
     3,
     1,
   );
@@ -95,17 +97,56 @@ test("digest with habits and reminders lists a line per habit plus a reminder su
 });
 
 test("digest with a single completed reminder uses the singular", () => {
-  const message = formatDigest([], new Map(), 1, 0);
+  const message = formatDigest([], 1, 0);
   assert.match(message, /1 reminder done this week, 0 still open\./);
 });
 
 test("digest with nothing tracked and a quiet week still sends", () => {
-  const message = formatDigest([], new Map(), 0, 0);
+  const message = formatDigest([], 0, 0);
   assert.match(message, /nothing tracked yet/);
   assert.match(message, /0 reminders done this week, 0 still open\./);
 });
 
-test("digest omits a habit's weekly count as 0 when it has no logs in the window", () => {
-  const message = formatDigest([habit({ name: "meditation", current_streak: 0 })], new Map(), 0, 0);
+test("digest shows a habit's own days_logged, not a shared default", () => {
+  const message = formatDigest(
+    [weeklyHabit({ name: "meditation", current_streak: 0, days_logged: 0 })],
+    0,
+    0,
+  );
   assert.match(message, /meditation: 0\/7, streak at 0/);
+});
+
+test("morning brief with nothing due and nothing at risk is a programming error, not a message", () => {
+  assert.throws(() => formatMorningBrief([], []), /nothing to say/);
+});
+
+test("morning brief with only reminders due lists them under 'Due today'", () => {
+  const message = formatMorningBrief(
+    [reminder({ text: "stretch", due_local: "09:00" })],
+    [],
+  );
+  const lines = message.split("\n");
+  assert.equal(lines[0], "Due today:");
+  assert.equal(lines[1], "  - stretch (09:00)");
+  assert.ok(!message.includes("At risk"), "no at-risk section when nothing is at risk");
+});
+
+test("morning brief with only at-risk habits lists them under 'At risk'", () => {
+  const message = formatMorningBrief([], [habit({ name: "reading", current_streak: 12 })]);
+  const lines = message.split("\n");
+  assert.equal(lines[0], "At risk:");
+  assert.equal(lines[1], "  - reading (12 days)");
+  assert.ok(!message.includes("Due today"), "no due-today section when nothing is due");
+});
+
+test("morning brief with both sections includes reminders first, then at-risk habits", () => {
+  const message = formatMorningBrief(
+    [reminder({ text: "stretch", due_local: "09:00" })],
+    [habit({ name: "reading", current_streak: 12 })],
+  );
+  const lines = message.split("\n");
+  assert.equal(lines[0], "Due today:");
+  assert.equal(lines[1], "  - stretch (09:00)");
+  assert.equal(lines[2], "At risk:");
+  assert.equal(lines[3], "  - reading (12 days)");
 });

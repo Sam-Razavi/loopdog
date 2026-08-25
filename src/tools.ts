@@ -12,6 +12,7 @@ import {
   type ReminderStatus,
 } from "./db/reminders";
 import { getHabitDetail, listHabits, logHabit, unlogHabit } from "./db/habits";
+import { gatherWeekSummary } from "./pusher";
 import { isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
 import { ToolError } from "./errors";
 
@@ -166,6 +167,15 @@ export const TOOLS: Anthropic.Tool[] = [
       "List every tracked habit with its current streak. Call this for broad " +
       "questions — 'how am I doing?', 'what am I tracking?', 'what's slipping?' — " +
       "rather than calling get_habit_streak repeatedly.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "week_summary",
+    description:
+      "Get a summary of the last 7 days — each habit's days logged and " +
+      "current streak, plus reminders completed and still pending. Call this " +
+      "when the user asks how the week's going or wants a recap on demand — " +
+      "separate from the automatic Sunday digest, which fires on its own schedule.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
@@ -338,6 +348,10 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "list_habits": {
       return { habits: listHabits() };
+    }
+
+    case "week_summary": {
+      return gatherWeekSummary();
     }
 
     case "undo_habit_log": {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { advanceLocalInstant, dayOfWeek, localHour, localTimeOfDay } from "./time";
+import { advanceLocalInstant, dayOfWeek, inQuietHours, localHour, localTimeOfDay } from "./time";
 
 // Stockholm: +02:00 in summer (CEST), +01:00 in winter (CET).
 test("localHour resolves against the configured zone in summer (+02:00)", () => {
@@ -55,4 +55,32 @@ test("dayOfWeek: Tuesday is 2", () => {
 
 test("dayOfWeek: Saturday is 6", () => {
   assert.equal(dayOfWeek("2026-08-29"), 6);
+});
+
+// inQuietHours with an explicit start/end, so these don't depend on
+// whatever LOOPDOG_QUIET_HOURS_START/END happen to be set in the process.
+test("inQuietHours: inside a window spanning midnight (23-7)", () => {
+  assert.equal(inQuietHours(new Date("2026-08-11T22:15:00Z"), 23, 7), true); // 00:15 local
+  assert.equal(inQuietHours(new Date("2026-08-11T03:00:00Z"), 23, 7), true); // 05:00 local
+});
+
+test("inQuietHours: outside a window spanning midnight (23-7)", () => {
+  assert.equal(inQuietHours(new Date("2026-08-11T05:00:00Z"), 23, 7), false); // 07:00 local
+  assert.equal(inQuietHours(new Date("2026-08-11T12:00:00Z"), 23, 7), false); // 14:00 local
+});
+
+test("inQuietHours: the start hour is inside, the end hour is not", () => {
+  // 23:00 local (start) is inside; 07:00 local (end) is outside — a
+  // half-open window, [start, end).
+  assert.equal(inQuietHours(new Date("2026-08-11T21:00:00Z"), 23, 7), true); // 23:00 local
+  assert.equal(inQuietHours(new Date("2026-08-11T05:00:00Z"), 23, 7), false); // 07:00 local
+});
+
+test("inQuietHours: a non-wrapping window (e.g. 1-5)", () => {
+  assert.equal(inQuietHours(new Date("2026-08-11T00:30:00Z"), 1, 5), true); // 02:30 local
+  assert.equal(inQuietHours(new Date("2026-08-11T05:00:00Z"), 1, 5), false); // 07:00 local
+});
+
+test("inQuietHours: equal start and end disables the feature", () => {
+  assert.equal(inQuietHours(new Date("2026-08-11T22:15:00Z"), 23, 23), false);
 });

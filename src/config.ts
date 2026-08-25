@@ -17,6 +17,9 @@ export interface Config {
   pushIntervalMinutes: number;
   atRiskNudgeHour: number;
   digestHour: number;
+  morningBriefHour: number;
+  quietHoursStart: number;
+  quietHoursEnd: number;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -101,6 +104,36 @@ function digestHour(): number {
   return hour;
 }
 
+function morningBriefHour(): number {
+  const raw = optional("LOOPDOG_MORNING_BRIEF_HOUR", "8");
+  const hour = Number(raw);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    coreProblems.push(`LOOPDOG_MORNING_BRIEF_HOUR must be an integer 0-23, got "${raw}"`);
+    return 8;
+  }
+  return hour;
+}
+
+function quietHoursStart(): number {
+  const raw = optional("LOOPDOG_QUIET_HOURS_START", "23");
+  const hour = Number(raw);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    coreProblems.push(`LOOPDOG_QUIET_HOURS_START must be an integer 0-23, got "${raw}"`);
+    return 23;
+  }
+  return hour;
+}
+
+function quietHoursEnd(): number {
+  const raw = optional("LOOPDOG_QUIET_HOURS_END", "7");
+  const hour = Number(raw);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    coreProblems.push(`LOOPDOG_QUIET_HOURS_END must be an integer 0-23, got "${raw}"`);
+    return 7;
+  }
+  return hour;
+}
+
 export const config: Config = {
   discordToken: requiredInto("DISCORD_TOKEN", discordProblems),
   ownerId: requiredInto("DISCORD_OWNER_ID", discordProblems),
@@ -115,6 +148,9 @@ export const config: Config = {
   pushIntervalMinutes: pushIntervalMinutes(),
   atRiskNudgeHour: atRiskNudgeHour(),
   digestHour: digestHour(),
+  morningBriefHour: morningBriefHour(),
+  quietHoursStart: quietHoursStart(),
+  quietHoursEnd: quietHoursEnd(),
 };
 
 function report(problems: string[], hint: string): void {
