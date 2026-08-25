@@ -4,6 +4,7 @@ import { formatAtRiskNudge, formatDigest, formatMorningBrief, formatPushMessage 
 import type { WeeklyHabitStat } from "./pusher";
 import type { ReminderView, Recurrence } from "./db/reminders";
 import type { HabitSummary } from "./db/habits";
+import type { CalendarEvent } from "./google";
 
 function reminder(overrides: Partial<ReminderView> = {}): ReminderView {
   return {
@@ -149,4 +150,42 @@ test("morning brief with both sections includes reminders first, then at-risk ha
   assert.equal(lines[1], "  - stretch (09:00)");
   assert.equal(lines[2], "At risk:");
   assert.equal(lines[3], "  - reading (12 days)");
+});
+
+function calendarEvent(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
+  return {
+    summary: "Team sync",
+    start: "2026-08-12T07:00:00.000Z",
+    end: "2026-08-12T07:30:00.000Z",
+    ...overrides,
+  };
+}
+
+test("morning brief with only calendar events lists them under 'On the calendar today'", () => {
+  const message = formatMorningBrief([], [], [calendarEvent()]);
+  const lines = message.split("\n");
+  assert.equal(lines[0], "On the calendar today:");
+  assert.match(lines[1]!, /Team sync/);
+});
+
+test("morning brief puts calendar events first, ahead of reminders and at-risk habits", () => {
+  const message = formatMorningBrief(
+    [reminder({ text: "stretch", due_local: "09:00" })],
+    [habit({ name: "reading", current_streak: 12 })],
+    [calendarEvent({ summary: "Dentist" })],
+  );
+  const lines = message.split("\n");
+  assert.equal(lines[0], "On the calendar today:");
+  assert.match(lines[1]!, /Dentist/);
+  assert.equal(lines[2], "Due today:");
+  assert.equal(lines[4], "At risk:");
+});
+
+test("morning brief shows an all-day event distinctly from a timed one", () => {
+  const message = formatMorningBrief([], [], [calendarEvent({ summary: "Public holiday", start: "2026-08-12" })]);
+  assert.match(message, /Public holiday \(all day\)/);
+});
+
+test("morning brief with nothing at all — no reminders, habits, or events — is still a programming error", () => {
+  assert.throws(() => formatMorningBrief([], [], []), /nothing to say/);
 });

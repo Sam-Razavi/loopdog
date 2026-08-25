@@ -16,7 +16,8 @@ import { hasBriefedToday, markBriefed } from "./db/morning";
 import { getMuteUntil } from "./db/mute";
 import { listWatches, updateWatchAfterCheck } from "./db/watches";
 import { fetchReadableText } from "./webfetch";
-import { addDays, dayOfWeek, inQuietHours, localDay, localHour, localInstant } from "./time";
+import * as googleCalendar from "./google";
+import { addDays, dayOfWeek, formatLocal, inQuietHours, localDay, localHour, localInstant } from "./time";
 
 /**
  * Composed server-side, deliberately, not through Claude — same reasoning as
@@ -179,11 +180,23 @@ async function checkWeeklyDigest(client: Client): Promise<void> {
 }
 
 /** Same composition philosophy as the other formatters — deterministic, no LLM call. */
-export function formatMorningBrief(reminders: ReminderView[], atRisk: HabitSummary[]): string {
-  if (reminders.length === 0 && atRisk.length === 0) {
+function formatEventTime(iso: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return "all day"; // date-only: an all-day event
+  return formatLocal(new Date(iso));
+}
+
+export function formatMorningBrief(
+  reminders: ReminderView[],
+  atRisk: HabitSummary[],
+  events: googleCalendar.CalendarEvent[] = [],
+): string {
+  if (reminders.length === 0 && atRisk.length === 0 && events.length === 0) {
     throw new Error("formatMorningBrief called with nothing to say");
   }
   const lines: string[] = [];
+  if (events.length) {
+    lines.push(`On the calendar today:`, ...events.map((e) => `  - ${e.summary} (${formatEventTime(e.start)})`));
+  }
   if (reminders.length) {
     lines.push(`Due today:`, ...reminders.map((r) => `  - ${r.text} (${r.due_local})`));
   }
@@ -203,7 +216,18 @@ async function checkMorningBrief(client: Client): Promise<void> {
     dueBefore: localInstant(addDays(today, 1), config.dayCutoffHour, 0).toISOString(),
   });
   const atRisk = habitsAtRisk();
-  if (dueToday.length === 0 && atRisk.length === 0) {
+
+  let events: googleCalendar.CalendarEvent[] = [];
+  if (googleCalendar.isConnected()) {
+    try {
+      events = await googleCalendar.listEvents(1);
+    } catch (error) {
+      console.error("[pusher] failed to fetch calendar events for morning brief:", error);
+      // not fatal — the brief still goes out with whatever else there is to say
+    }
+  }
+
+  if (dueToday.length === 0 && atRisk.length === 0 && events.length === 0) {
     // Nothing to say this morning — mark handled, same "stay quiet" pattern
     // the at-risk nudge already uses for an empty result.
     markBriefed(today);
@@ -212,7 +236,7 @@ async function checkMorningBrief(client: Client): Promise<void> {
 
   try {
     const owner = await client.users.fetch(config.ownerId);
-    await owner.send(formatMorningBrief(dueToday, atRisk));
+    await owner.send(formatMorningBrief(dueToday, atRisk, events));
     markBriefed(today); // only after the send actually succeeds
   } catch (error) {
     console.error("[pusher] failed to send morning brief:", error);
@@ -273,7 +297,40 @@ async function checkPageWatches(client: Client): Promise<void> {
   }
 }
 
+/**
+ * Finishes a Google Calendar device-flow connection in the background, so
+ * the user doesn't have to remember to come back and ask "did it work?" —
+ * one poll attempt per tick if a code is pending. Runs even while muted:
+ * this is a direct completion of something the user explicitly asked to
+ * do (connect_calendar), not an unprompted nudge, so vacation mode
+ * shouldn't swallow it.
+ */
+async function checkPendingGoogleAuth(client: Client): Promise<void> {
+  let outcome: "connected" | "expired" | "denied" | null;
+  try {
+    outcome = await googleCalendar.pollPendingConnection();
+  } catch (error) {
+    console.error("[pusher] failed to poll pending calendar connection:", error);
+    return;
+  }
+  if (outcome === null) return; // nothing pending, or still waiting on the user
+
+  const message =
+    outcome === "connected"
+      ? "Calendar connected."
+      : outcome === "denied"
+        ? "Calendar connection was declined."
+        : "Calendar connection request expired before it was approved. Ask me to connect again.";
+  try {
+    const owner = await client.users.fetch(config.ownerId);
+    await owner.send(message);
+  } catch (error) {
+    console.error("[pusher] failed to send calendar connection result:", error);
+  }
+}
+
 async function tick(client: Client): Promise<void> {
+  await checkPendingGoogleAuth(client);
   if (getMuteUntil()) return; // vacation mode: skip every proactive DM this tick
   await checkAndPush(client);
   await checkAtRiskNudge(client);
@@ -288,9 +345,11 @@ async function tick(client: Client): Promise<void> {
  * during quiet hours), the once-daily at-risk habit nudge, the once-a-week
  * Sunday digest, the once-daily morning brief, and watched-page change
  * alerts (each on its own, slower LOOPDOG_WATCH_INTERVAL_MINUTES cadence)
- * — all of it suppressed entirely while a vacation mute is active. Runs
- * once immediately (so a restart doesn't wait a full interval to catch
- * anything that fell due while the bot was down), then on a timer at
+ * — all of it suppressed entirely while a vacation mute is active, except
+ * finishing a Google Calendar connection the user explicitly started,
+ * which isn't an unprompted nudge and always goes through. Runs once
+ * immediately (so a restart doesn't wait a full interval to catch anything
+ * that fell due while the bot was down), then on a timer at
  * LOOPDOG_PUSH_INTERVAL_MINUTES — fine-grained enough to also catch "has
  * the nudge/digest/brief/watch interval arrived" without extra timers.
  */

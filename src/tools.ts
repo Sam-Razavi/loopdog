@@ -19,6 +19,7 @@ import { createWatch, deleteWatch, listWatches } from "./db/watches";
 import { getMetricHistory, listMetrics, logMetric, type MetricMode } from "./db/metrics";
 import { renderHabitChart } from "./chart";
 import { renderMetricChart } from "./linechart";
+import * as googleCalendar from "./google";
 import { gatherWeekSummary } from "./pusher";
 import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
@@ -476,6 +477,62 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["name"],
     },
   },
+  {
+    name: "connect_calendar",
+    description:
+      "Connect Google Calendar. Call this when the user asks to connect, set " +
+      "up, or link their calendar, or asks 'did it connect?' / 'is it " +
+      "connected?' after starting the process. Re-invokable and idempotent: " +
+      "if a connection attempt is already in progress, this checks it instead " +
+      "of starting a new one; if already connected, it says so. On first call " +
+      "it returns a short code and a URL — tell the user to go there and enter " +
+      "the code, then ask you to check again once they have.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "disconnect_calendar",
+    description: "Disconnect Google Calendar. Call when the user asks to unlink or disconnect it.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "list_calendar_events",
+    description:
+      "List upcoming Google Calendar events. Call this for any question about " +
+      "what's on the calendar. Fails with a plain error if not connected yet — " +
+      "tell the user to ask you to connect_calendar first.",
+    input_schema: {
+      type: "object",
+      properties: {
+        days: {
+          type: "integer",
+          description: "How many days ahead to look. Defaults to 7.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "create_calendar_event",
+    description:
+      "Create a Google Calendar event. Call this when the user asks to add, " +
+      "schedule, or book something on their calendar. Fails with a plain " +
+      "error if not connected yet.",
+    input_schema: {
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "Event title." },
+        start: {
+          type: "string",
+          description: "Start time, ISO-8601 with an explicit UTC offset, same format as create_reminder's due_at.",
+        },
+        end: {
+          type: "string",
+          description: "End time, same format as start.",
+        },
+      },
+      required: ["summary", "start", "end"],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -775,6 +832,27 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const path = join(tmpdir(), `loopdog-metric-chart-${nowUtcIso().replace(/[:.]/g, "-")}.png`);
       await writeFile(path, png);
       return { ok: true, path, name, days };
+    }
+
+    case "connect_calendar": {
+      return await googleCalendar.connect();
+    }
+
+    case "disconnect_calendar": {
+      return { disconnected: googleCalendar.disconnect() };
+    }
+
+    case "list_calendar_events": {
+      const days = optionalInt(input, "days", 7);
+      return { events: await googleCalendar.listEvents(days) };
+    }
+
+    case "create_calendar_event": {
+      return await googleCalendar.createEvent(
+        str(input, "summary"),
+        toUtcIso(str(input, "start")),
+        toUtcIso(str(input, "end")),
+      );
     }
 
     default:

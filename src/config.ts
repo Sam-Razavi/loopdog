@@ -22,6 +22,9 @@ export interface Config {
   quietHoursEnd: number;
   city: string;
   watchIntervalMinutes: number;
+  /** Optional — Google Calendar stays unavailable (a plain ToolError on use) until both are set. */
+  googleClientId: string;
+  googleClientSecret: string;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -165,6 +168,8 @@ export const config: Config = {
   quietHoursEnd: quietHoursEnd(),
   city: optional("LOOPDOG_CITY", "Stockholm"),
   watchIntervalMinutes: watchIntervalMinutes(),
+  googleClientId: optional("GOOGLE_CLIENT_ID", ""),
+  googleClientSecret: optional("GOOGLE_CLIENT_SECRET", ""),
 };
 
 function report(problems: string[], hint: string): void {

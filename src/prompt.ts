@@ -2,6 +2,7 @@ import { config } from "./config";
 import { habitsAtRisk } from "./db/habits";
 import { getMuteUntil } from "./db/mute";
 import { listOverdue } from "./db/reminders";
+import { getStatus as getCalendarStatus } from "./google";
 import { currentOffset, formatLocal, localDay } from "./time";
 
 // Voice compass: the friend who never makes it weird. Understated, doesn't
@@ -120,6 +121,13 @@ function liveState(): string {
       ``,
       `Proactive DMs (pushes, nudges, digest, morning brief) are muted until ${formatLocal(new Date(muteUntil))}. Conversation itself is unaffected. Only mention this if asked about it — don't bring it up unprompted.`,
     );
+  }
+
+  const calendarStatus = getCalendarStatus();
+  if (calendarStatus === "connected") {
+    lines.push(``, `Google Calendar is connected — use list_calendar_events/create_calendar_event directly, no need to check first.`);
+  } else if (calendarStatus === "pending") {
+    lines.push(``, `A Google Calendar connection is mid-setup, waiting on the user to approve it in a browser. If asked, call connect_calendar to check whether it's gone through yet.`);
   }
 
   return lines.join("\n");
