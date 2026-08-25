@@ -96,8 +96,13 @@ async function main(): Promise<void> {
         `listening to ${config.ownerId} only.`,
     );
     console.log(
-      `Checking for overdue reminders every ${config.pushIntervalMinutes} minute(s), ` +
-        `at-risk nudge around ${String(config.atRiskNudgeHour).padStart(2, "0")}:00.`,
+      `Checking for overdue reminders every ${config.pushIntervalMinutes} minute(s) ` +
+        `(quiet hours ${String(config.quietHoursStart).padStart(2, "0")}:00-` +
+        `${String(config.quietHoursEnd).padStart(2, "0")}:00), ` +
+        `at-risk nudge around ${String(config.atRiskNudgeHour).padStart(2, "0")}:00, ` +
+        `digest Sundays around ${String(config.digestHour).padStart(2, "0")}:00, ` +
+        `morning brief around ${String(config.morningBriefHour).padStart(2, "0")}:00, ` +
+        `page watches every ${config.watchIntervalMinutes} minute(s).`,
     );
     startScheduler(client);
   });
