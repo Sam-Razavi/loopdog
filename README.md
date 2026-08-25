@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with thirty tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with thirty-three tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -100,6 +100,9 @@ everything else.
 | `disconnect_calendar` | Unlink Google Calendar |
 | `list_calendar_events` | Upcoming events, once connected |
 | `create_calendar_event` | Add an event to the calendar |
+| `remember` | Store a standing fact — a preference, an allergy, a detail worth keeping |
+| `list_memories` | Everything currently remembered |
+| `forget` | Delete a stored memory |
 
 ### Streaks
 
@@ -304,6 +307,18 @@ carefully, but — like the very first version of the Discord bot itself —
 hasn't been exercised against a real Google account yet. The first real test
 is whoever sets up real credentials and says "connect my calendar."
 
+### Persistent memory
+
+Ordinary conversation only reaches back about 20 messages — plenty for a chat,
+not for "remember this forever." Say "remember that I'm allergic to shellfish"
+or "remember my mom's birthday is March 3rd" and it's injected into every future
+system prompt from then on, not just recalled if it happens to still be recent.
+Ask what's remembered, or ask to forget something that's no longer true.
+
+This is deliberately narrow — only things explicitly worth keeping long-term,
+not a transcript of everything said. A stray remark doesn't become a memory;
+"remember that..." (or something just as clearly meant to stick) does.
+
 ## Setup
 
 ### 1. Create the Discord bot
@@ -476,7 +491,7 @@ src/
 ├── imagetype.ts  sniffs an image's real format from its bytes
 ├── linechart.ts  metric trend-line image, built on png.ts
 ├── google.ts     Google Calendar OAuth device flow + Calendar API
-└── db/           SQLite: reminders, habits, metrics, watches, conversation history
+└── db/           SQLite: reminders, habits, metrics, memories, watches, conversation history
 ```
 
 Inspect the database directly with `sqlite3 loopdog.sqlite`. Back-dating a few rows in

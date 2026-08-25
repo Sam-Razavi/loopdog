@@ -17,6 +17,7 @@ import { getHabitDetail, listHabits, logHabit, unlogHabit } from "./db/habits";
 import { clearMute, setMute } from "./db/mute";
 import { createWatch, deleteWatch, listWatches } from "./db/watches";
 import { getMetricHistory, listMetrics, logMetric, type MetricMode } from "./db/metrics";
+import { addMemory, forgetMemory, listMemories } from "./db/memories";
 import { renderHabitChart } from "./chart";
 import { renderMetricChart } from "./linechart";
 import * as googleCalendar from "./google";
@@ -533,6 +534,45 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["summary", "start", "end"],
     },
   },
+  {
+    name: "remember",
+    description:
+      "Store a fact permanently — a preference, an allergy, an important date, " +
+      "an ongoing detail about the user's life. Distinct from ordinary " +
+      "conversation, which only stays in the recent window: a memory is " +
+      "injected into every future conversation, always known, not just " +
+      "recalled if it happens to still be recent. Call this only when the " +
+      "user explicitly says something like 'remember that...', or clearly " +
+      "means something to stick around long-term — not for casual remarks or " +
+      "anything already covered by a reminder/habit/metric tool.",
+    input_schema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "The fact to remember, plainly stated." },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "list_memories",
+    description: "List everything currently remembered. Call if the user asks what you know or remember about them.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "forget",
+    description:
+      "Delete a stored memory. Call when the user asks to forget something, " +
+      "or says a remembered fact is no longer true. The id is already visible " +
+      "in the live-state block below if it's currently listed there; call " +
+      "list_memories first only if you don't already know the id.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "The memory's id." },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -853,6 +893,18 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
         toUtcIso(str(input, "start")),
         toUtcIso(str(input, "end")),
       );
+    }
+
+    case "remember": {
+      return addMemory(str(input, "text"));
+    }
+
+    case "list_memories": {
+      return { memories: listMemories() };
+    }
+
+    case "forget": {
+      return forgetMemory(int(input, "id"));
     }
 
     default:

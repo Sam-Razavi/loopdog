@@ -128,4 +128,15 @@ CREATE TABLE IF NOT EXISTS google_auth (
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL
 );
+
+-- Standing facts the user explicitly asked Loopdog to remember — distinct
+-- from conversation history, which only feeds the last ~20 turns into each
+-- response. Every memory here is injected into every system prompt, so
+-- it's always known, not just recalled if it happens to still be in the
+-- recent window.
+CREATE TABLE IF NOT EXISTS memories (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  text       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;

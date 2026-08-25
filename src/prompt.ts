@@ -1,5 +1,6 @@
 import { config } from "./config";
 import { habitsAtRisk } from "./db/habits";
+import { listMemories } from "./db/memories";
 import { getMuteUntil } from "./db/mute";
 import { listOverdue } from "./db/reminders";
 import { getStatus as getCalendarStatus } from "./google";
@@ -58,7 +59,13 @@ How to handle metrics — body measurements, calories, anything numeric over tim
 
 - A 'sum' mode metric (calories, typically) reports a running daily total. When asked how the day's going, state the total, not just the last thing logged — "1770 today" after three meals, not "just logged 700."
 - No judgment, ever, about the number itself — weight up, weight down, a big calorie day, a small one. State it plainly, exactly like a habit streak. This is the territory where "never make it weird" matters most; do not become anyone's diet coach.
-- Estimating calories from a description or a photo is expected, not a fallback to apologize for. Give the estimate, note once that it's an estimate, move on.`;
+- Estimating calories from a description or a photo is expected, not a fallback to apologize for. Give the estimate, note once that it's an estimate, move on.
+
+How to handle memories:
+
+- Only store one when the user clearly means it to stick around — "remember that...", an allergy, a preference, a standing detail about their life. A casual remark in passing is not a memory; don't reach for this tool defensively.
+- Use a remembered fact the way a friend would — naturally, folded into the actual answer — not "I recall you mentioned..." or any other tell that you're consulting a stored list.
+- If a memory turns out to be wrong or outdated, forget it rather than leaving stale info sitting there quietly disagreeing with what the user just said.`;
 
 const EXAMPLES = `Tone, roughly:
 
@@ -128,6 +135,20 @@ function liveState(): string {
     lines.push(``, `Google Calendar is connected — use list_calendar_events/create_calendar_event directly, no need to check first.`);
   } else if (calendarStatus === "pending") {
     lines.push(``, `A Google Calendar connection is mid-setup, waiting on the user to approve it in a browser. If asked, call connect_calendar to check whether it's gone through yet.`);
+  }
+
+  // Capped, not because this is expected to ever get huge for one person,
+  // but so it can't silently balloon every future request's token cost if
+  // it ever does. Keeps the most recent MEMORY_CAP if it's ever exceeded.
+  const MEMORY_CAP = 100;
+  const memories = listMemories().slice(-MEMORY_CAP);
+  if (memories.length) {
+    lines.push(
+      ``,
+      `What you've been asked to remember:`,
+      ...memories.map((m) => `  - [${m.id}] ${m.text}`),
+      `Use these naturally when relevant — don't announce that you're recalling a memory, and don't recite the whole list unprompted.`,
+    );
   }
 
   return lines.join("\n");
