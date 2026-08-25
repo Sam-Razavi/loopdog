@@ -1,0 +1,7 @@
+# better-sqlite3 is a native module — it compiles from source via node-gyp
+# during `npm ci` unless a prebuilt binary matches the exact Node version
+# Railway picked. node-gyp needs Python and a C/C++ toolchain, which the
+# base Nixpacks Node image doesn't include by default. Without this, the
+# build fails with "Could not find any Python installation to use."
+[phases.setup]
+aptPkgs = ["python3", "make", "g++"]
