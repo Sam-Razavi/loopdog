@@ -2,6 +2,7 @@ import { getDb } from "./db";
 import { config } from "./config";
 import { nowUtcIso } from "./time";
 import { ToolError } from "./errors";
+import { buildRfc822Message } from "./email";
 
 /**
  * Google account access (Calendar + Gmail) via the OAuth device flow (RFC
@@ -440,10 +441,7 @@ export interface DraftResult {
 /** Creates a Gmail draft. Never sends — there is no send function in this file, deliberately. */
 export async function createDraft(to: string, subject: string, body: string): Promise<DraftResult> {
   const token = await getAccessToken();
-  const rfc822 = [`To: ${to}`, `Subject: ${subject}`, `Content-Type: text/plain; charset="UTF-8"`, ``, body].join(
-    "\r\n",
-  );
-  const raw = Buffer.from(rfc822, "utf-8")
+  const raw = Buffer.from(buildRfc822Message(to, subject, body), "utf-8")
     .toString("base64")
     .replace(/\+/g, "-")
     .replace(/\//g, "_")

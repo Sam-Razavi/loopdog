@@ -102,9 +102,9 @@ everything else.
 | `create_calendar_event` | Add an event to the calendar |
 | `connect_hotmail` | Start or check a Hotmail/Outlook connection — separate account from Google, both connectable at once |
 | `disconnect_hotmail` | Unlink the Hotmail/Outlook account |
-| `list_emails` | List or search email, from whichever of Gmail/Hotmail is connected |
+| `list_emails` | List or search email, from whichever of Gmail/Hotmail/PrivateMail is usable |
 | `get_email` | Full content of one email, including body text |
-| `create_email_draft` | Create a draft — never sends, no send tool exists for either provider |
+| `create_email_draft` | Create a draft — never sends, no send tool exists for any provider |
 | `remember` | Store a standing fact — a preference, an allergy, a detail worth keeping |
 | `list_memories` | Everything currently remembered |
 | `forget` | Delete a stored memory |
@@ -329,11 +329,12 @@ is whoever sets up real credentials and says "connect my Google account."
 A second, independent email account — Hotmail, Outlook.com, and Live.com are
 all Microsoft personal accounts, authenticated through Microsoft's own
 identity platform rather than Google's, so this is a fully separate
-connection with its own setup. **Both Gmail and Hotmail can be connected at
-the same time.** With only one connected, `list_emails` / `get_email` /
-`create_email_draft` just use it. With both connected, they ask (or infer
-from an @hotmail.com/@outlook.com/@live.com address) which inbox a request
-means, rather than guessing silently.
+connection with its own setup. **Gmail, Hotmail, and PrivateMail (below)
+can all be usable at the same time.** With only one usable, `list_emails` /
+`get_email` / `create_email_draft` just use it. With more than one, they
+ask (or infer from an @hotmail.com/@outlook.com/@live.com address, or the
+user's own domain for PrivateMail) which inbox a request means, rather
+than guessing silently.
 
 Connecting uses the same OAuth **device flow** as Google, for the same
 reason — no public web server to receive a redirect on. Say "connect my
@@ -371,6 +372,57 @@ yet" instead of anything breaking.
 
 **Worth knowing:** same as Google above — code-complete, reasoned through
 carefully, not yet exercised against a real Microsoft account.
+
+### PrivateMail
+
+A third, independent email account — a custom-domain mailbox (e.g.
+`you@yourdomain.com`) hosted on [Namecheap Private
+Email](https://www.namecheap.com/hosting/email/) (`mail.privateemail.com`).
+Unlike Gmail and Hotmail, this isn't an OAuth product at all — there's no
+device flow, no app registration, no "connect" step. It's either configured
+(both env vars set) or it isn't, checked fresh every time it's used.
+
+Reached over plain **IMAP**, via the [`imapflow`](https://imapflow.com/)
+library — the one real new dependency this needed. Everything else so far
+was hand-rolled deliberately to avoid new dependencies (a from-scratch PNG
+encoder instead of canvas/sharp, regex-based HTML extraction instead of
+jsdom); hand-rolling IMAP's own TLS framing and command/response protocol
+would be a much bigger and more error-prone undertaking than either of
+those, so this is the one deliberate exception. Verified before use: `npm
+ls imapflow --all` shows a fully pure-JS dependency tree (no
+`.gyp`/native-build files anywhere in it), so it carries none of the
+Railway native-build risk `better-sqlite3` once did.
+
+**Read + draft only, same policy as Gmail and Hotmail — arguably the
+firmest version of the guarantee of the three.** There is no send tool
+here either, and on top of that, IMAP itself has no concept of sending
+mail — that needs a separate SMTP connection, which this integration never
+opens. **The real trade-off is the credential, not the send risk:**
+there's no OAuth here, so the only way in is the mailbox's actual
+username and password, stored in `.env` the same tier as the Discord
+token and Anthropic key already are. Unlike an OAuth token, it can't be
+scoped or revoked from Loopdog's side — only by changing the password on
+Namecheap's own end.
+
+**Setup**, no portal walkthrough needed:
+
+1. Note your Private Email address and its password (from Namecheap's
+   dashboard, if you don't have it handy).
+2. Set `PRIVATEMAIL_EMAIL` (the full address) and `PRIVATEMAIL_PASSWORD`
+   in Railway's Variables tab.
+3. Redeploy (should trigger automatically on variable change).
+
+Optional at boot — leave both unset and PrivateMail tools just report "not
+set up yet" instead of anything breaking.
+
+One functional gap worth knowing: `list_emails` results for PrivateMail
+have no preview snippet the way Gmail/Hotmail's do — IMAP has no free
+equivalent to fetch one, and adding it would mean a lot more IMAP round
+trips per listing. `get_email` still returns the full body for anything
+that needs it.
+
+**Worth knowing:** same as Google/Hotmail above — code-complete, reasoned
+through carefully, not yet exercised against a real mailbox.
 
 ### Persistent memory
 
@@ -525,6 +577,8 @@ transcript up top happened — no Discord app was open for any of it.
 | `GOOGLE_CLIENT_ID` | — | Optional. Enables Google Calendar + Gmail — see its section above |
 | `GOOGLE_CLIENT_SECRET` | — | Optional, paired with `GOOGLE_CLIENT_ID` |
 | `HOTMAIL_CLIENT_ID` | — | Optional. Enables Hotmail/Outlook email — see its section above. No paired secret needed |
+| `PRIVATEMAIL_EMAIL` | — | Optional. Enables PrivateMail (Namecheap, IMAP) — see its section above |
+| `PRIVATEMAIL_PASSWORD` | — | Optional, paired with `PRIVATEMAIL_EMAIL`. The actual mailbox password — no OAuth for this provider |
 
 Missing variables are reported all at once at boot, by name.
 
@@ -558,6 +612,8 @@ src/
 ├── linechart.ts  metric trend-line image, built on png.ts
 ├── google.ts     Google OAuth device flow + Calendar API + Gmail API (read/draft only)
 ├── hotmail.ts    Microsoft OAuth device flow + Graph mail API (read/draft only)
+├── privatemail.ts  Namecheap Private Email over IMAP, via imapflow (read/draft only)
+├── email.ts      tiny shared RFC822-message builder (google.ts + privatemail.ts)
 └── db/           SQLite: reminders, habits, metrics, memories, watches, conversation history
 ```
 

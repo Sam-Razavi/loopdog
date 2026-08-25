@@ -5,6 +5,7 @@ import { getMuteUntil } from "./db/mute";
 import { listOverdue } from "./db/reminders";
 import { getStatus as getCalendarStatus } from "./google";
 import { getStatus as getHotmailStatus } from "./hotmail";
+import { getStatus as getPrivatemailStatus } from "./privatemail";
 import { currentOffset, formatLocal, localDay } from "./time";
 
 // Voice compass: the friend who never makes it weird. Understated, doesn't
@@ -151,10 +152,23 @@ function liveState(): string {
     lines.push(``, `A Hotmail/Outlook connection is mid-setup, waiting on the user to approve it in a browser. If asked, call connect_hotmail to check whether it's gone through yet.`);
   }
 
-  if (googleStatus === "connected" && hotmailStatus === "connected") {
+  const privatemailStatus = getPrivatemailStatus();
+  if (privatemailStatus === "configured") {
     lines.push(
       ``,
-      `Both Gmail and Hotmail are connected. list_emails/get_email/create_email_draft need "provider" set when it's not obvious which inbox is meant — infer it from context (an address ending in @hotmail.com/@outlook.com/@live.com clearly means Hotmail) or just ask, don't guess silently.`,
+      `PrivateMail (a custom-domain mailbox) is set up — no connect step needed for this one, it's ready whenever env vars are present. Its email tools work the same way as Gmail/Hotmail's. No send tool exists for this either.`,
+    );
+  }
+
+  const usableEmailProviders = [
+    googleStatus === "connected" ? "Gmail" : null,
+    hotmailStatus === "connected" ? "Hotmail" : null,
+    privatemailStatus === "configured" ? "PrivateMail" : null,
+  ].filter((p): p is string => p !== null);
+  if (usableEmailProviders.length > 1) {
+    lines.push(
+      ``,
+      `More than one email account is usable right now (${usableEmailProviders.join(", ")}). list_emails/get_email/create_email_draft need "provider" set when it's not obvious which inbox is meant — infer it from context (an address ending in @hotmail.com/@outlook.com/@live.com clearly means Hotmail; the user's own domain clearly means PrivateMail) or just ask, don't guess silently.`,
     );
   }
 

@@ -20,7 +20,8 @@
     "@anthropic-ai/sdk": "^0.116.0",
     "better-sqlite3": "^13.0.3",
     "discord.js": "^14.27.0",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "imapflow": "^1.7.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

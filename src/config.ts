@@ -27,6 +27,9 @@ export interface Config {
   googleClientSecret: string;
   /** Optional — Hotmail/Outlook stays unavailable (a plain ToolError on use) until set. No secret: the device flow's public-client token exchange never sends one. */
   hotmailClientId: string;
+  /** Optional — PrivateMail (Namecheap, IMAP) stays unavailable until both are set. No OAuth for this provider: this is the actual mailbox password. */
+  privatemailEmail: string;
+  privatemailPassword: string;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -173,6 +176,8 @@ export const config: Config = {
   googleClientId: optional("GOOGLE_CLIENT_ID", ""),
   googleClientSecret: optional("GOOGLE_CLIENT_SECRET", ""),
   hotmailClientId: optional("HOTMAIL_CLIENT_ID", ""),
+  privatemailEmail: optional("PRIVATEMAIL_EMAIL", ""),
+  privatemailPassword: optional("PRIVATEMAIL_PASSWORD", ""),
 };
 
 function report(problems: string[], hint: string): void {

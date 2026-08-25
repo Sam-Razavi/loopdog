@@ -22,6 +22,7 @@ import { renderHabitChart } from "./chart";
 import { renderMetricChart } from "./linechart";
 import * as googleCalendar from "./google";
 import * as hotmail from "./hotmail";
+import * as privatemail from "./privatemail";
 import { gatherWeekSummary } from "./pusher";
 import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
@@ -562,34 +563,38 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "list_emails",
     description:
-      "List or search email — Gmail, Hotmail/Outlook, or whichever is " +
-      "connected. Call this for any question about what's in the inbox, or " +
-      "to find a specific email. Fails with a plain error if nothing's " +
-      "connected yet — tell the user to ask you to connect_google or " +
-      "connect_hotmail first. If both are connected and it's not clear " +
-      "which one the user means, this fails asking you to specify " +
-      "'provider' — ask the user, or infer it from context (an address " +
-      "ending in @hotmail.com/@outlook.com/@live.com clearly means " +
-      "Hotmail). Returns sender, subject, date, and a short snippet for " +
-      "each match, not the full body — call get_email with an id from " +
-      "these results if the full content is actually needed.",
+      "List or search email — Gmail, Hotmail/Outlook, PrivateMail, or " +
+      "whichever is set up. Call this for any question about what's in " +
+      "the inbox, or to find a specific email. Fails with a plain error if " +
+      "nothing's usable yet — tell the user to ask you to connect_google, " +
+      "connect_hotmail, or set up PrivateMail's env vars first. If more " +
+      "than one is usable and it's not clear which one the user means, " +
+      "this fails asking you to specify 'provider' — ask the user, or " +
+      "infer it from context (an address ending in " +
+      "@hotmail.com/@outlook.com/@live.com clearly means Hotmail; the " +
+      "user's own domain clearly means PrivateMail). Returns sender, " +
+      "subject, and date for each match (plus a short snippet for Gmail/" +
+      "Hotmail — PrivateMail doesn't have one), not the full body — call " +
+      "get_email with an id from these results if the full content is " +
+      "actually needed.",
     input_schema: {
       type: "object",
       properties: {
         provider: {
           type: "string",
-          enum: ["gmail", "hotmail"],
+          enum: ["gmail", "hotmail", "privatemail"],
           description:
-            "Which connected account to use. Omit if only one is connected — " +
-            "only needed when both Gmail and Hotmail are connected.",
+            "Which account to use. Omit if only one is usable — only needed " +
+            "when more than one of Gmail/Hotmail/PrivateMail is usable at once.",
         },
         query: {
           type: "string",
           description:
             "Search terms. For Gmail this is Gmail's own search syntax, e.g. " +
             "'is:unread', 'from:someone@example.com', 'newer_than:7d', " +
-            "'subject:invoice'. For Hotmail this is a plain-text search across " +
-            "subject/body/sender. Omit for the most recent inbox messages.",
+            "'subject:invoice'. For Hotmail and PrivateMail this is a " +
+            "plain-text search across subject/body/sender. Omit for the " +
+            "most recent inbox messages.",
         },
         max_results: {
           type: "integer",
@@ -611,8 +616,8 @@ export const TOOLS: Anthropic.Tool[] = [
         id: { type: "string", description: "The email's id, from list_emails." },
         provider: {
           type: "string",
-          enum: ["gmail", "hotmail"],
-          description: "Which account the id came from. Omit if only one is connected.",
+          enum: ["gmail", "hotmail", "privatemail"],
+          description: "Which account the id came from. Omit if only one is usable.",
         },
       },
       required: ["id"],
@@ -621,12 +626,12 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "create_email_draft",
     description:
-      "Create an email draft — in Gmail, Hotmail/Outlook, or whichever the " +
-      "user means. This is the only email tool that writes anything — " +
-      "there is no send tool, deliberately: Loopdog can compose an email " +
-      "but the user always reviews and sends it themselves. Call this when " +
-      "the user asks to draft, write, or compose an email, and tell them " +
-      "it's sitting in Drafts once done.",
+      "Create an email draft — in Gmail, Hotmail/Outlook, PrivateMail, or " +
+      "whichever the user means. This is the only email tool that writes " +
+      "anything — there is no send tool for any of the three, deliberately: " +
+      "Loopdog can compose an email but the user always reviews and sends " +
+      "it themselves. Call this when the user asks to draft, write, or " +
+      "compose an email, and tell them it's sitting in Drafts once done.",
     input_schema: {
       type: "object",
       properties: {
@@ -635,10 +640,10 @@ export const TOOLS: Anthropic.Tool[] = [
         body: { type: "string", description: "Plain-text email body." },
         provider: {
           type: "string",
-          enum: ["gmail", "hotmail"],
+          enum: ["gmail", "hotmail", "privatemail"],
           description:
-            "Which connected account to draft from. Omit if only one is " +
-            "connected — only needed when both Gmail and Hotmail are connected.",
+            "Which account to draft from. Omit if only one is usable — only " +
+            "needed when more than one of Gmail/Hotmail/PrivateMail is usable at once.",
         },
       },
       required: ["to", "subject", "body"],
@@ -760,32 +765,40 @@ function stringArray(input: Record<string, unknown>, key: string): string[] {
   return value;
 }
 
-type EmailProvider = "gmail" | "hotmail";
+type EmailProvider = "gmail" | "hotmail" | "privatemail";
+const EMAIL_PROVIDERS: EmailProvider[] = ["gmail", "hotmail", "privatemail"];
 
 /**
- * Picks which connected email account an email tool call should use.
- * Explicit `provider` wins; otherwise exactly one connected account picks
- * itself. Neither connected, or both connected with no `provider` given,
- * is a ToolError telling the model what to do next rather than guessing —
- * same "say what went wrong, offer the obvious next step" pattern as every
- * other tool error.
+ * Picks which usable email account an email tool call should use. Explicit
+ * `provider` wins; otherwise exactly one usable account picks itself. Zero
+ * usable, or more than one usable with no `provider` given, is a ToolError
+ * telling the model what to do next rather than guessing — same "say what
+ * went wrong, offer the obvious next step" pattern as every other tool
+ * error. PrivateMail has no connect/disconnect step — "usable" for it just
+ * means its env vars are set.
  */
 function resolveEmailProvider(input: Record<string, unknown>): EmailProvider {
   const requested = optionalStr(input, "provider");
   if (requested !== undefined) {
-    if (requested !== "gmail" && requested !== "hotmail") {
-      throw new ToolError(`"provider" must be "gmail" or "hotmail", got "${requested}"`);
+    if (!EMAIL_PROVIDERS.includes(requested as EmailProvider)) {
+      throw new ToolError(`"provider" must be one of ${EMAIL_PROVIDERS.join(", ")}, got "${requested}"`);
     }
-    return requested;
+    return requested as EmailProvider;
   }
-  const gmailOn = googleCalendar.isConnected();
-  const hotmailOn = hotmail.isConnected();
-  if (gmailOn && !hotmailOn) return "gmail";
-  if (hotmailOn && !gmailOn) return "hotmail";
-  if (!gmailOn && !hotmailOn) {
-    throw new ToolError(`no email account connected — call connect_google or connect_hotmail first, or ask the user which they want.`);
+  const usable = EMAIL_PROVIDERS.filter((provider) =>
+    provider === "gmail"
+      ? googleCalendar.isConnected()
+      : provider === "hotmail"
+        ? hotmail.isConnected()
+        : privatemail.isConfigured(),
+  );
+  if (usable.length === 1) return usable[0]!;
+  if (usable.length === 0) {
+    throw new ToolError(
+      `no email account usable yet — call connect_google, call connect_hotmail, or set up PrivateMail's env vars, or ask the user which they want.`,
+    );
   }
-  throw new ToolError(`both Gmail and Hotmail are connected — call again with "provider" set to whichever the user means.`);
+  throw new ToolError(`more than one email account is usable (${usable.join(", ")}) — call again with "provider" set to whichever the user means.`);
 }
 
 export async function runTool(name: string, rawInput: unknown): Promise<unknown> {
@@ -1048,14 +1061,21 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const emails =
         provider === "gmail"
           ? await googleCalendar.listEmails(query, maxResults)
-          : await hotmail.listEmails(query, maxResults);
+          : provider === "hotmail"
+            ? await hotmail.listEmails(query, maxResults)
+            : await privatemail.listEmails(query, maxResults);
       return { provider, emails };
     }
 
     case "get_email": {
       const provider = resolveEmailProvider(input);
       const id = str(input, "id");
-      const email = provider === "gmail" ? await googleCalendar.getEmail(id) : await hotmail.getEmail(id);
+      const email =
+        provider === "gmail"
+          ? await googleCalendar.getEmail(id)
+          : provider === "hotmail"
+            ? await hotmail.getEmail(id)
+            : await privatemail.getEmail(id);
       return { provider, ...email };
     }
 
@@ -1065,7 +1085,11 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const subject = str(input, "subject");
       const body = str(input, "body");
       const draft =
-        provider === "gmail" ? await googleCalendar.createDraft(to, subject, body) : await hotmail.createDraft(to, subject, body);
+        provider === "gmail"
+          ? await googleCalendar.createDraft(to, subject, body)
+          : provider === "hotmail"
+            ? await hotmail.createDraft(to, subject, body)
+            : await privatemail.createDraft(to, subject, body);
       return { provider, ...draft };
     }
 
