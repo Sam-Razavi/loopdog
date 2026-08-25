@@ -4,23 +4,38 @@ import { nowUtcIso } from "./time";
 import { ToolError } from "./errors";
 
 /**
- * Google Calendar via the OAuth device flow (RFC 8628) — the same pattern
- * CLI tools and smart TVs use: no redirect URI, no callback server, just a
- * short code the user enters at a URL in any browser while Loopdog polls in
- * the background. Fits how Loopdog already works (a chat bot with no public
- * HTTP surface) far better than the standard authorization-code flow would.
+ * Google account access (Calendar + Gmail) via the OAuth device flow (RFC
+ * 8628) — the same pattern CLI tools and smart TVs use: no redirect URI, no
+ * callback server, just a short code the user enters at a URL in any
+ * browser while Loopdog polls in the background. Fits how Loopdog already
+ * works (a chat bot with no public HTTP surface) far better than the
+ * standard authorization-code flow would.
+ *
+ * One connection covers both products, so there's only ever one OAuth dance
+ * to do. Gmail scope is deliberately capped at readonly + compose — never
+ * gmail.send or gmail.modify — because the safety boundary that actually
+ * matters ("Loopdog can never send an email on your behalf") is enforced by
+ * simply not exposing a send tool in tools.ts, not by the scope alone.
+ * gmail.compose technically permits sending too, so don't rely on scope as
+ * the guardrail if a send-capable function ever gets added here — the
+ * guardrail is "no send tool exists," full stop.
  */
 
-const SCOPE = "https://www.googleapis.com/auth/calendar.events";
+const SCOPE = [
+  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.compose",
+].join(" ");
 const DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const CALENDAR_API = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 function requireCredentials(): { clientId: string; clientSecret: string } {
   if (!config.googleClientId || !config.googleClientSecret) {
     throw new ToolError(
-      "Calendar isn't set up yet — GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET aren't configured.",
+      "Google isn't set up yet — GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET aren't configured.",
     );
   }
   return { clientId: config.googleClientId, clientSecret: config.googleClientSecret };
@@ -81,7 +96,7 @@ async function requestDeviceCode(): Promise<DeviceCodeResponse> {
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) {
-    throw new ToolError(`couldn't start the calendar connection (HTTP ${response.status})`);
+    throw new ToolError(`couldn't start the Google connection (HTTP ${response.status})`);
   }
   return (await response.json()) as DeviceCodeResponse;
 }
@@ -208,7 +223,7 @@ async function getAccessToken(): Promise<string> {
   const row = getAuthRow();
   if (!row || row.status !== "connected" || !row.access_token || !row.refresh_token) {
     throw new ToolError(
-      `calendar isn't connected — call connect_calendar first, or ask the user to.`,
+      `Google account isn't connected — call connect_google first, or ask the user to.`,
     );
   }
   if (row.token_expires_at && row.token_expires_at > nowUtcIso()) {
@@ -229,7 +244,7 @@ async function getAccessToken(): Promise<string> {
   });
   const data = (await response.json()) as TokenResponse;
   if (!response.ok || !data.access_token) {
-    throw new ToolError("calendar connection expired — call connect_calendar to reconnect.");
+    throw new ToolError("Google connection expired — call connect_google to reconnect.");
   }
   getDb()
     .prepare(`UPDATE google_auth SET access_token = ?, token_expires_at = ?, updated_at = ? WHERE id = 1`)
@@ -303,4 +318,143 @@ export async function createEvent(
     start: item.start?.dateTime ?? startIso,
     end: item.end?.dateTime ?? endIso,
   };
+}
+
+// --- Gmail (read + draft only — see the top-of-file note on why there is
+// deliberately no send function here) ---------------------------------
+
+export interface EmailSummary {
+  id: string;
+  threadId: string;
+  from: string;
+  subject: string;
+  date: string;
+  snippet: string;
+}
+
+interface GmailHeader {
+  name: string;
+  value: string;
+}
+
+interface GmailPart {
+  mimeType?: string;
+  body?: { data?: string };
+  parts?: GmailPart[];
+}
+
+interface GmailMessage extends GmailPart {
+  id: string;
+  threadId: string;
+  snippet?: string;
+  headers?: GmailHeader[];
+}
+
+function headerValue(headers: GmailHeader[] | undefined, name: string): string {
+  return headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
+}
+
+function decodeBase64Url(data: string): string {
+  return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
+}
+
+/** Walks a (possibly multipart) message body for the first text/plain part. */
+function extractPlainText(part: GmailPart | undefined): string | null {
+  if (!part) return null;
+  if (part.mimeType === "text/plain" && part.body?.data) return decodeBase64Url(part.body.data);
+  for (const child of part.parts ?? []) {
+    const found = extractPlainText(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Lists/searches emails. `query` uses Gmail's own search syntax (e.g.
+ * "is:unread", "from:someone@example.com", "newer_than:7d") — omit it for
+ * the most recent inbox messages. One list call plus one metadata fetch per
+ * message; fine at the maxResults this is ever called with for one person.
+ */
+export async function listEmails(query: string | undefined, maxResults: number): Promise<EmailSummary[]> {
+  const token = await getAccessToken();
+  const listUrl = new URL(`${GMAIL_API}/messages`);
+  listUrl.searchParams.set("q", query && query.trim() ? query.trim() : "in:inbox");
+  listUrl.searchParams.set("maxResults", String(maxResults));
+  const listResponse = await fetch(listUrl, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!listResponse.ok) throw new ToolError(`couldn't list emails (HTTP ${listResponse.status})`);
+  const listData = (await listResponse.json()) as { messages?: { id: string }[] };
+  const ids = listData.messages ?? [];
+
+  const results: EmailSummary[] = [];
+  for (const { id } of ids) {
+    const detailUrl = new URL(`${GMAIL_API}/messages/${id}`);
+    detailUrl.searchParams.set("format", "metadata");
+    for (const header of ["From", "Subject", "Date"]) detailUrl.searchParams.append("metadataHeaders", header);
+    const detailResponse = await fetch(detailUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!detailResponse.ok) continue; // skip a message that vanished/failed rather than failing the whole list
+    const detail = (await detailResponse.json()) as GmailMessage;
+    results.push({
+      id: detail.id,
+      threadId: detail.threadId,
+      from: headerValue(detail.headers, "From"),
+      subject: headerValue(detail.headers, "Subject"),
+      date: headerValue(detail.headers, "Date"),
+      snippet: detail.snippet ?? "",
+    });
+  }
+  return results;
+}
+
+export async function getEmail(id: string): Promise<EmailSummary & { body: string }> {
+  const token = await getAccessToken();
+  const url = new URL(`${GMAIL_API}/messages/${id}`);
+  url.searchParams.set("format", "full");
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new ToolError(`couldn't read that email (HTTP ${response.status})`);
+  const detail = (await response.json()) as GmailMessage;
+  return {
+    id: detail.id,
+    threadId: detail.threadId,
+    from: headerValue(detail.headers, "From"),
+    subject: headerValue(detail.headers, "Subject"),
+    date: headerValue(detail.headers, "Date"),
+    snippet: detail.snippet ?? "",
+    body: extractPlainText(detail) ?? detail.snippet ?? "",
+  };
+}
+
+export interface DraftResult {
+  draftId: string;
+  messageId: string;
+}
+
+/** Creates a Gmail draft. Never sends — there is no send function in this file, deliberately. */
+export async function createDraft(to: string, subject: string, body: string): Promise<DraftResult> {
+  const token = await getAccessToken();
+  const rfc822 = [`To: ${to}`, `Subject: ${subject}`, `Content-Type: text/plain; charset="UTF-8"`, ``, body].join(
+    "\r\n",
+  );
+  const raw = Buffer.from(rfc822, "utf-8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+  const response = await fetch(`${GMAIL_API}/drafts`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: { raw } }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new ToolError(`couldn't create the draft (HTTP ${response.status})`);
+  const data = (await response.json()) as { id: string; message?: { id?: string } };
+  return { draftId: data.id, messageId: data.message?.id ?? "" };
 }

@@ -109,11 +109,12 @@ CREATE TABLE IF NOT EXISTS metric_logs (
 CREATE INDEX IF NOT EXISTS idx_metric_logs_lookup
   ON metric_logs(metric_id, day DESC);
 
--- Google OAuth (Calendar): at most one row, same single-row shape as mute.
--- 'pending' while waiting on the user to approve the device-flow code in a
--- browser; 'connected' once real tokens are stored. GOOGLE_CLIENT_ID/SECRET
--- are optional env vars — this table simply stays empty for anyone who
--- never sets them up, no impact on the rest of the app.
+-- Google OAuth (Calendar + Gmail, one connection covers both): at most one
+-- row, same single-row shape as mute. 'pending' while waiting on the user
+-- to approve the device-flow code in a browser; 'connected' once real
+-- tokens are stored. GOOGLE_CLIENT_ID/SECRET are optional env vars — this
+-- table simply stays empty for anyone who never sets them up, no impact on
+-- the rest of the app.
 CREATE TABLE IF NOT EXISTS google_auth (
   id               INTEGER PRIMARY KEY CHECK (id = 1),
   status           TEXT NOT NULL,        -- 'pending' | 'connected'

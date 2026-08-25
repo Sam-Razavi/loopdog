@@ -479,20 +479,24 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
-    name: "connect_calendar",
+    name: "connect_google",
     description:
-      "Connect Google Calendar. Call this when the user asks to connect, set " +
-      "up, or link their calendar, or asks 'did it connect?' / 'is it " +
-      "connected?' after starting the process. Re-invokable and idempotent: " +
-      "if a connection attempt is already in progress, this checks it instead " +
-      "of starting a new one; if already connected, it says so. On first call " +
-      "it returns a short code and a URL — tell the user to go there and enter " +
+      "Connect the user's Google account (Calendar + Gmail, one connection " +
+      "covers both). Call this when the user asks to connect, set up, or link " +
+      "their calendar or email, or asks 'did it connect?' / 'is it connected?' " +
+      "after starting the process. Re-invokable and idempotent: if a " +
+      "connection attempt is already in progress, this checks it instead of " +
+      "starting a new one; if already connected, it says so. On first call it " +
+      "returns a short code and a URL — tell the user to go there and enter " +
       "the code, then ask you to check again once they have.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
-    name: "disconnect_calendar",
-    description: "Disconnect Google Calendar. Call when the user asks to unlink or disconnect it.",
+    name: "disconnect_google",
+    description:
+      "Disconnect the Google account. Call when the user asks to unlink or " +
+      "disconnect calendar or email access — this removes both at once, " +
+      "since they share one connection.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
@@ -500,7 +504,7 @@ export const TOOLS: Anthropic.Tool[] = [
     description:
       "List upcoming Google Calendar events. Call this for any question about " +
       "what's on the calendar. Fails with a plain error if not connected yet — " +
-      "tell the user to ask you to connect_calendar first.",
+      "tell the user to ask you to connect_google first.",
     input_schema: {
       type: "object",
       properties: {
@@ -532,6 +536,65 @@ export const TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ["summary", "start", "end"],
+    },
+  },
+  {
+    name: "list_emails",
+    description:
+      "List or search the user's Gmail. Call this for any question about " +
+      "what's in their inbox, or to find a specific email. Fails with a " +
+      "plain error if not connected yet — tell the user to ask you to " +
+      "connect_google first. Returns sender, subject, date, and a short " +
+      "snippet for each match, not the full body — call get_email with an " +
+      "id from these results if the full content is actually needed.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Gmail search syntax, e.g. 'is:unread', 'from:someone@example.com', " +
+            "'newer_than:7d', 'subject:invoice'. Omit for the most recent " +
+            "inbox messages.",
+        },
+        max_results: {
+          type: "integer",
+          description: "How many to return. Defaults to 10.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_email",
+    description:
+      "Get the full content of one email, including its body text. Call " +
+      "this when the user asks about the actual content of a message found " +
+      "via list_emails, not just its subject/snippet.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The email's id, from list_emails." },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "create_email_draft",
+    description:
+      "Create a Gmail draft. This is the only email tool that writes " +
+      "anything — there is no send tool, deliberately: Loopdog can compose " +
+      "an email but the user always reviews and sends it themselves from " +
+      "Gmail. Call this when the user asks to draft, write, or compose an " +
+      "email, and tell them it's sitting in Drafts once done.",
+    input_schema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Recipient email address." },
+        subject: { type: "string", description: "Email subject line." },
+        body: { type: "string", description: "Plain-text email body." },
+      },
+      required: ["to", "subject", "body"],
     },
   },
   {
@@ -874,11 +937,11 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       return { ok: true, path, name, days };
     }
 
-    case "connect_calendar": {
+    case "connect_google": {
       return await googleCalendar.connect();
     }
 
-    case "disconnect_calendar": {
+    case "disconnect_google": {
       return { disconnected: googleCalendar.disconnect() };
     }
 
@@ -893,6 +956,19 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
         toUtcIso(str(input, "start")),
         toUtcIso(str(input, "end")),
       );
+    }
+
+    case "list_emails": {
+      const maxResults = optionalInt(input, "max_results", 10);
+      return { emails: await googleCalendar.listEmails(optionalStr(input, "query"), maxResults) };
+    }
+
+    case "get_email": {
+      return await googleCalendar.getEmail(str(input, "id"));
+    }
+
+    case "create_email_draft": {
+      return await googleCalendar.createDraft(str(input, "to"), str(input, "subject"), str(input, "body"));
     }
 
     case "remember": {

@@ -130,11 +130,14 @@ function liveState(): string {
     );
   }
 
-  const calendarStatus = getCalendarStatus();
-  if (calendarStatus === "connected") {
-    lines.push(``, `Google Calendar is connected — use list_calendar_events/create_calendar_event directly, no need to check first.`);
-  } else if (calendarStatus === "pending") {
-    lines.push(``, `A Google Calendar connection is mid-setup, waiting on the user to approve it in a browser. If asked, call connect_calendar to check whether it's gone through yet.`);
+  const googleStatus = getCalendarStatus();
+  if (googleStatus === "connected") {
+    lines.push(
+      ``,
+      `Google is connected — Calendar (list_calendar_events/create_calendar_event) and Gmail (list_emails/get_email/create_email_draft) tools are usable directly, no need to check first. There is deliberately no send-email tool — draft only, the user sends it themselves.`,
+    );
+  } else if (googleStatus === "pending") {
+    lines.push(``, `A Google connection is mid-setup, waiting on the user to approve it in a browser. If asked, call connect_google to check whether it's gone through yet.`);
   }
 
   // Capped, not because this is expected to ever get huge for one person,

@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with thirty-three tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with thirty-six tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -96,10 +96,13 @@ everything else.
 | `get_metric_history` | A metric's recent day-by-day values and current reading |
 | `list_metrics` | Everything numeric being tracked, with today's value |
 | `metric_chart` | A trend-line image of a metric's recent history, as a Discord attachment |
-| `connect_calendar` | Start or check a Google Calendar connection (optional, see below) |
-| `disconnect_calendar` | Unlink Google Calendar |
+| `connect_google` | Start or check a Google connection — Calendar + Gmail together (optional, see below) |
+| `disconnect_google` | Unlink the Google account |
 | `list_calendar_events` | Upcoming events, once connected |
 | `create_calendar_event` | Add an event to the calendar |
+| `list_emails` | List or search Gmail, once connected |
+| `get_email` | Full content of one email, including body text |
+| `create_email_draft` | Create a Gmail draft — never sends, no send tool exists |
 | `remember` | Store a standing fact — a preference, an allergy, a detail worth keeping |
 | `list_memories` | Everything currently remembered |
 | `forget` | Delete a stored memory |
@@ -143,8 +146,9 @@ preference. Set both variables to the same value to turn it off entirely.
 
 Once a day, around `LOOPDOG_MORNING_BRIEF_HOUR` (default 08:00 local), Loopdog sends
 one DM gathering what's due today and what's at risk into a single message, instead
-of it trickling in separately throughout the day. If Google Calendar is connected
-(see below), today's events lead the message, ahead of reminders and habits. If
+of it trickling in separately throughout the day. If Google is connected
+(see below), today's calendar events lead the message, ahead of reminders and
+habits. If
 there's genuinely nothing to say, it stays quiet. Fires at most once per day.
 
 ### Vacation / mute mode
@@ -269,27 +273,38 @@ cleaning" edits a reminder in place.
 running Loopdog (see [Deploying to Railway](#deploying-to-railway) below for why
 this matters there specifically).
 
-### Google Calendar
+### Google: Calendar + Gmail
 
-Entirely optional — "connect my calendar" starts it, everything else works
-identically with or without it. Once connected, `list_calendar_events` and
-`create_calendar_event` work in conversation, and the morning brief leads with
-today's events ahead of reminders and at-risk habits.
+Entirely optional — "connect my Google account" starts it, everything else
+works identically with or without it. One connection covers both products, so
+there's only one OAuth dance to do. Once connected, `list_calendar_events` and
+`create_calendar_event` work in conversation, the morning brief leads with
+today's events ahead of reminders and at-risk habits, and `list_emails` /
+`get_email` / `create_email_draft` work for Gmail.
 
 Connecting uses the OAuth **device flow** — the same pattern CLI tools and smart
 TVs use — instead of the more common browser-redirect flow, deliberately: Loopdog
 has no public web server to receive a redirect on, and this way it doesn't need
-one. Say "connect my calendar," and Loopdog gives you a short code and a URL
-(`google.com/device`) — open that on any device, sign in, enter the code, and
-come back and ask "did it connect?" (or just wait — Loopdog checks in the
+one. Say "connect my Google account," and Loopdog gives you a short code and a
+URL (`google.com/device`) — open that on any device, sign in, enter the code,
+and come back and ask "did it connect?" (or just wait — Loopdog checks in the
 background and DMs you once it's through, even during a vacation mute, since
 this is a direct result of something you asked it to do, not an unprompted
 nudge).
 
+**Email is read + draft only, on purpose.** Loopdog can read your inbox, search
+it, and write a draft — it can never send anything. There is no send-email tool
+anywhere in the codebase; that's the actual guardrail, not the OAuth scope
+(`gmail.compose` alone would technically still permit sending via the API, so
+the scope isn't relied on as the safety boundary — the absence of a send tool
+is). A draft Loopdog writes sits in Gmail's Drafts folder until you review it
+and hit send yourself.
+
 **Setup**, in [Google Cloud Console](https://console.cloud.google.com/):
 
 1. Create a project (or use an existing one).
-2. **APIs & Services → Library** → enable the **Google Calendar API**.
+2. **APIs & Services → Library** → enable the **Google Calendar API** and the
+   **Gmail API**.
 3. **APIs & Services → OAuth consent screen** → External, fill in the required
    fields, add yourself under **Test users**. "Testing" publishing status is
    fine — this never needs Google's app review for personal use.
@@ -299,13 +314,13 @@ nudge).
 5. Copy the **Client ID** and **Client Secret** — these are `GOOGLE_CLIENT_ID`
    and `GOOGLE_CLIENT_SECRET`.
 
-Both are optional at boot — leave them unset and calendar tools just report
-"not set up yet" instead of anything breaking.
+Both are optional at boot — leave them unset and Calendar/Gmail tools just
+report "not set up yet" instead of anything breaking.
 
 **Worth knowing:** this integration is code-complete and reasoned through
 carefully, but — like the very first version of the Discord bot itself —
 hasn't been exercised against a real Google account yet. The first real test
-is whoever sets up real credentials and says "connect my calendar."
+is whoever sets up real credentials and says "connect my Google account."
 
 ### Persistent memory
 
@@ -457,7 +472,7 @@ transcript up top happened — no Discord app was open for any of it.
 | `LOOPDOG_QUIET_HOURS_END` | `7` | Local hour quiet hours end and held-back reminders push |
 | `LOOPDOG_CITY` | `Stockholm` | Default city for weather lookups |
 | `LOOPDOG_WATCH_INTERVAL_MINUTES` | `60` | How often each watched page gets re-checked |
-| `GOOGLE_CLIENT_ID` | — | Optional. Enables Google Calendar — see its section above |
+| `GOOGLE_CLIENT_ID` | — | Optional. Enables Google Calendar + Gmail — see its section above |
 | `GOOGLE_CLIENT_SECRET` | — | Optional, paired with `GOOGLE_CLIENT_ID` |
 
 Missing variables are reported all at once at boot, by name.
@@ -490,7 +505,7 @@ src/
 ├── chart.ts      habit calendar-heatmap image, built on png.ts
 ├── imagetype.ts  sniffs an image's real format from its bytes
 ├── linechart.ts  metric trend-line image, built on png.ts
-├── google.ts     Google Calendar OAuth device flow + Calendar API
+├── google.ts     Google OAuth device flow + Calendar API + Gmail API (read/draft only)
 └── db/           SQLite: reminders, habits, metrics, memories, watches, conversation history
 ```
 
