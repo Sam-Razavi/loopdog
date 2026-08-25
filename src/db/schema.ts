@@ -71,4 +71,15 @@ CREATE TABLE IF NOT EXISTS mute (
   id    INTEGER PRIMARY KEY CHECK (id = 1),
   until TEXT NOT NULL                  -- UTC ISO-8601; mute lifts here
 );
+
+-- Pages Loopdog is watching for changes. One background check per watch,
+-- gated by its own last_checked_at, not the shared push interval.
+CREATE TABLE IF NOT EXISTS watches (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  url             TEXT NOT NULL,
+  note            TEXT,                 -- optional, what to mention when it changes
+  content_hash    TEXT NOT NULL,        -- sha256 of the extracted text at last check
+  created_at      TEXT NOT NULL,
+  last_checked_at TEXT
+);
 `;

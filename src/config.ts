@@ -20,6 +20,8 @@ export interface Config {
   morningBriefHour: number;
   quietHoursStart: number;
   quietHoursEnd: number;
+  city: string;
+  watchIntervalMinutes: number;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -134,6 +136,16 @@ function quietHoursEnd(): number {
   return hour;
 }
 
+function watchIntervalMinutes(): number {
+  const raw = optional("LOOPDOG_WATCH_INTERVAL_MINUTES", "60");
+  const minutes = Number(raw);
+  if (!Number.isInteger(minutes) || minutes < 1) {
+    coreProblems.push(`LOOPDOG_WATCH_INTERVAL_MINUTES must be a positive integer, got "${raw}"`);
+    return 60;
+  }
+  return minutes;
+}
+
 export const config: Config = {
   discordToken: requiredInto("DISCORD_TOKEN", discordProblems),
   ownerId: requiredInto("DISCORD_OWNER_ID", discordProblems),
@@ -151,6 +163,8 @@ export const config: Config = {
   morningBriefHour: morningBriefHour(),
   quietHoursStart: quietHoursStart(),
   quietHoursEnd: quietHoursEnd(),
+  city: optional("LOOPDOG_CITY", "Stockholm"),
+  watchIntervalMinutes: watchIntervalMinutes(),
 };
 
 function report(problems: string[], hint: string): void {

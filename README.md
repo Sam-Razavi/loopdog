@@ -55,9 +55,18 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with thirteen tools attached. Claude
-decides what to call and what to say; the bot is a thin harness around that loop.
-State lives in a local SQLite file, so everything survives a restart.
+Every message goes to Claude (`claude-sonnet-5`) with twenty-one tools attached.
+Claude decides what to call and what to say; the bot is a thin harness around that
+loop. State lives in a local SQLite file, so everything survives a restart.
+
+Most tools are pure local logic — reminders, habits, mute. A handful reach the
+open web: fetching a page, watching one for changes, checking the weather,
+converting currency. Those use two free, key-less public APIs
+([frankfurter.app](https://frankfurter.app) for exchange rates,
+[Open-Meteo](https://open-meteo.com) for weather/geocoding) plus arbitrary
+URL fetches for links you give it — nothing needs a secret added to your
+`.env`, and every call is still gated behind the single-user check, same as
+everything else.
 
 | Tool | What it does |
 |---|---|
@@ -74,6 +83,14 @@ State lives in a local SQLite file, so everything survives a restart.
 | `export_backup` | Send the live database as a Discord file attachment |
 | `set_mute` | Pause every proactive DM until a given time |
 | `clear_mute` | Resume proactive DMs early |
+| `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
+| `watch_page` | Start watching a page; DMs when its content changes |
+| `list_watches` | List every page currently being watched |
+| `unwatch_page` | Stop watching a page |
+| `random_pick` | Pick one option at random from a list, for real |
+| `roll_dice` | Roll dice, or flip a coin (sides: 2) |
+| `convert_currency` | Convert an amount between currencies at a live rate |
+| `get_weather` | Current conditions for the configured city, or another one named |
 
 ### Streaks
 
@@ -133,6 +150,30 @@ Once a day, around `LOOPDOG_AT_RISK_NUDGE_HOUR` (default 21:00 local), Loopdog c
 for habits with a live streak and nothing logged yet today — the grace-day case —
 and sends one DM if there's anything to say. If everything's covered, it stays
 quiet. Fires at most once per day; nothing spammy about it.
+
+### Fetching and summarizing links
+
+Share a URL and ask about it, and Loopdog actually fetches the page and reads it —
+no separate research tool needed. It's a plain HTML-to-text extraction, no headless
+browser, so it works well on ordinary articles and docs and poorly on pages that
+need JavaScript to render their content.
+
+### Watching a page for changes
+
+"Watch this page and tell me when it changes" is the one genuinely autonomous
+thing here — Loopdog notices something in the world on its own, not on a schedule
+you set. Say what to watch for in a note ("restock", "price drop") and it'll
+mention that when it alerts. Checked on its own cadence,
+`LOOPDOG_WATCH_INTERVAL_MINUTES` (default 60 — deliberately slower than the
+reminder push, since these requests go to someone else's server, not your own
+database). `unwatch it`/`list_watches` manage what's being watched.
+
+### Quick utilities
+
+Real randomness (`crypto.randomInt`, not a guess) for "flip a coin," "roll two
+d20," or "pick one of these for me." Live currency conversion off an actual
+exchange rate. Current weather for `LOOPDOG_CITY` (default Stockholm) or any city
+named on the spot.
 
 ### Sunday evening digest
 
@@ -261,6 +302,8 @@ unless it lives on a persistent Volume.
    LOOPDOG_MORNING_BRIEF_HOUR=8
    LOOPDOG_QUIET_HOURS_START=23
    LOOPDOG_QUIET_HOURS_END=7
+   LOOPDOG_CITY=Stockholm
+   LOOPDOG_WATCH_INTERVAL_MINUTES=60
    ```
    `LOOPDOG_DB` has to point inside the volume's mount path (`/data`) —
    that's the whole trick. Everywhere else it can stay as the `./loopdog.sqlite`
@@ -303,6 +346,8 @@ transcript up top happened — no Discord app was open for any of it.
 | `LOOPDOG_MORNING_BRIEF_HOUR` | `8` | Local hour the morning brief goes out. Fires at most once a day |
 | `LOOPDOG_QUIET_HOURS_START` | `23` | Reminders falling due after this local hour hold until `..._END`. Equal to `..._END` disables it |
 | `LOOPDOG_QUIET_HOURS_END` | `7` | Local hour quiet hours end and held-back reminders push |
+| `LOOPDOG_CITY` | `Stockholm` | Default city for weather lookups |
+| `LOOPDOG_WATCH_INTERVAL_MINUTES` | `60` | How often each watched page gets re-checked |
 
 Missing variables are reported all at once at boot, by name.
 
@@ -312,7 +357,7 @@ Missing variables are reported all at once at boot, by name.
 npm run dev        # watch mode, full Discord bot
 npm run chat       # terminal REPL, no Discord needed — see above
 npm run typecheck  # tsc --noEmit
-npm test           # streak rules
+npm test           # streak rules + every other pure function
 npm run build      # -> dist/
 ```
 
@@ -321,13 +366,16 @@ src/
 ├── index.ts      Discord client, owner gate, message routing
 ├── repl.ts       terminal chat harness — same agent loop, no Discord
 ├── agent.ts      the Claude tool-use loop
-├── pusher.ts     background poll: reminder pushes, at-risk nudge, digest, morning brief, mute gate
+├── pusher.ts     background poll: reminder pushes, nudge, digest, brief, watches, mute gate
 ├── prompt.ts     personality + live state injected each turn
 ├── tools.ts      tool schemas and dispatch
 ├── streak.ts     streak rules (pure, unit-tested)
 ├── time.ts       timezone and the 4am boundary
 ├── config.ts     env parsing with fail-fast validation
-└── db/           SQLite: reminders, habits, conversation history
+├── webfetch.ts   fetch + HTML-to-text extraction (fetch_url, watch_page)
+├── weather.ts    Open-Meteo geocoding + forecast
+├── random.ts     real randomness for random_pick/roll_dice
+└── db/           SQLite: reminders, habits, watches, conversation history
 ```
 
 Inspect the database directly with `sqlite3 loopdog.sqlite`. Back-dating a few rows in

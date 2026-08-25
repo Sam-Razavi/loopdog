@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
@@ -13,8 +14,12 @@ import {
 } from "./db/reminders";
 import { getHabitDetail, listHabits, logHabit, unlogHabit } from "./db/habits";
 import { clearMute, setMute } from "./db/mute";
+import { createWatch, deleteWatch, listWatches } from "./db/watches";
 import { gatherWeekSummary } from "./pusher";
+import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
+import { fetchReadableText } from "./webfetch";
+import { getWeather } from "./weather";
 import { ToolError } from "./errors";
 
 export { ToolError };
@@ -230,12 +235,12 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "set_mute",
     description:
-      "Pause all proactive DMs — reminder pushes, the at-risk nudge, the Sunday " +
-      "digest, the morning brief — until a given time. Call this when the user " +
-      "asks not to be nudged or bothered for a while: 'mute for a week', 'don't " +
-      "nudge me until Friday', 'I'm traveling until the 30th, leave me alone " +
-      "till then'. Conversation still works as normal while muted — this only " +
-      "stops proactive DMs.",
+      "Pause every proactive DM Loopdog sends unprompted — reminder pushes, " +
+      "habit nudges, the digest, the morning brief, watched-page alerts — until " +
+      "a given time. Call this when the user asks not to be nudged or bothered " +
+      "for a while: 'mute for a week', 'don't nudge me until Friday', 'I'm " +
+      "traveling until the 30th, leave me alone till then'. Conversation still " +
+      "works as normal while muted — this only stops proactive DMs.",
     input_schema: {
       type: "object",
       properties: {
@@ -255,6 +260,111 @@ export const TOOLS: Anthropic.Tool[] = [
       "Resume proactive DMs immediately. Call when the user says they're back, " +
       "or wants nudges again before a mute would naturally expire.",
     input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "fetch_url",
+    description:
+      "Fetch a web page and return its readable text, for summarizing or " +
+      "answering questions about it. Call this when the user shares a link and " +
+      "asks about it, or asks you to read or summarize a URL. Works well for " +
+      "text-heavy pages; poorly for pages that need JavaScript to render.",
+    input_schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The page to fetch, including http(s)://." },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "watch_page",
+    description:
+      "Start watching a web page for changes. Loopdog checks it periodically " +
+      "and DMs when the content changes. Call this when the user asks to be " +
+      "told when a page changes — a restock, a price drop, a status page.",
+    input_schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The page to watch, including http(s)://." },
+        note: {
+          type: "string",
+          description: "What to mention in the alert, e.g. 'restock' or 'price drop'. Optional.",
+        },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "list_watches",
+    description: "List every page currently being watched for changes.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "unwatch_page",
+    description: "Stop watching a page. Call when the user no longer wants alerts for it.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "The watch's id, from list_watches." },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "random_pick",
+    description:
+      "Pick one option at random for the user — 'coffee or tea', 'pick a " +
+      "restaurant for me from these three'. Real randomness, not a guess.",
+    input_schema: {
+      type: "object",
+      properties: {
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description: "At least two options to pick from.",
+        },
+      },
+      required: ["options"],
+    },
+  },
+  {
+    name: "roll_dice",
+    description: "Roll one or more dice, or flip a coin (sides: 2). Real randomness.",
+    input_schema: {
+      type: "object",
+      properties: {
+        sides: { type: "integer", description: "Sides per die. Defaults to 6." },
+        count: { type: "integer", description: "How many to roll. Defaults to 1." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "convert_currency",
+    description: "Convert an amount between two currencies using a live exchange rate.",
+    input_schema: {
+      type: "object",
+      properties: {
+        amount: { type: "number", description: "The amount to convert." },
+        from: { type: "string", description: "Source currency code, e.g. 'USD'." },
+        to: { type: "string", description: "Target currency code, e.g. 'SEK'." },
+      },
+      required: ["amount", "from", "to"],
+    },
+  },
+  {
+    name: "get_weather",
+    description:
+      "Get current weather conditions. Call this for any weather question — " +
+      "'what's it like out', 'should I run today'. Defaults to the configured " +
+      "city if none is given.",
+    input_schema: {
+      type: "object",
+      properties: {
+        city: { type: "string", description: "Optional. Defaults to the configured city." },
+      },
+      required: [],
+    },
   },
 ];
 
@@ -309,6 +419,26 @@ function optionalRecurrence(
   if (value === undefined) return null;
   if (value !== "daily" && value !== "weekly") {
     throw new ToolError(`"${key}" must be "daily" or "weekly", got "${value}"`);
+  }
+  return value;
+}
+
+function num(input: Record<string, unknown>, key: string): number {
+  const value = input[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new ToolError(`"${key}" is required and must be a number`);
+  }
+  return value;
+}
+
+function stringArray(input: Record<string, unknown>, key: string): string[] {
+  const value = input[key];
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    !value.every((item) => typeof item === "string")
+  ) {
+    throw new ToolError(`"${key}" is required and must be a non-empty array of strings`);
   }
   return value;
 }
@@ -421,6 +551,68 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "clear_mute": {
       return { cleared: clearMute() };
+    }
+
+    case "fetch_url": {
+      return await fetchReadableText(str(input, "url"));
+    }
+
+    case "watch_page": {
+      const url = str(input, "url");
+      const note = optionalStr(input, "note") ?? null;
+      const { text } = await fetchReadableText(url);
+      const contentHash = createHash("sha256").update(text).digest("hex");
+      return createWatch(url, note, contentHash);
+    }
+
+    case "list_watches": {
+      return { watches: listWatches() };
+    }
+
+    case "unwatch_page": {
+      const id = int(input, "id");
+      const deleted = deleteWatch(id);
+      if (!deleted) throw new ToolError(`no watch with id ${id}`);
+      return { deleted: true, watch: deleted };
+    }
+
+    case "random_pick": {
+      return { picked: pickRandom(stringArray(input, "options")) };
+    }
+
+    case "roll_dice": {
+      const sides = optionalInt(input, "sides", 6);
+      const count = optionalInt(input, "count", 1);
+      const rolls = rollDice(sides, count);
+      return { rolls, total: rolls.reduce((sum, roll) => sum + roll, 0) };
+    }
+
+    case "convert_currency": {
+      const amount = num(input, "amount");
+      const from = str(input, "from").toUpperCase();
+      const to = str(input, "to").toUpperCase();
+      let response: Response;
+      try {
+        response = await fetch(
+          `https://api.frankfurter.app/latest?amount=${amount}&from=${from}&to=${to}`,
+          { signal: AbortSignal.timeout(10_000) },
+        );
+      } catch (error) {
+        throw new ToolError(
+          `couldn't reach the exchange rate service: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (!response.ok) {
+        throw new ToolError(`couldn't convert ${from} to ${to} — check the currency codes`);
+      }
+      const data = (await response.json()) as { amount: number; date: string; rates: Record<string, number> };
+      const result = data.rates[to];
+      if (result === undefined) throw new ToolError(`no rate available for ${to}`);
+      return { amount, from, to, result, rate_date: data.date };
+    }
+
+    case "get_weather": {
+      return await getWeather(optionalStr(input, "city"));
     }
 
     default:

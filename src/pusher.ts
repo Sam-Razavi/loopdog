@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Client } from "discord.js";
 import { config } from "./config";
 import {
@@ -13,6 +14,8 @@ import { hasNudgedToday, markNudged } from "./db/nudges";
 import { hasDigestedThisWeek, markDigested } from "./db/digest";
 import { hasBriefedToday, markBriefed } from "./db/morning";
 import { getMuteUntil } from "./db/mute";
+import { listWatches, updateWatchAfterCheck } from "./db/watches";
+import { fetchReadableText } from "./webfetch";
 import { addDays, dayOfWeek, inQuietHours, localDay, localHour, localInstant } from "./time";
 
 /**
@@ -217,24 +220,79 @@ async function checkMorningBrief(client: Client): Promise<void> {
   }
 }
 
+/** Same composition philosophy as the other formatters — deterministic, no LLM call. */
+export function formatWatchAlert(changes: { url: string; note: string | null }[]): string {
+  if (changes.length === 0) {
+    throw new Error("formatWatchAlert called with no changes");
+  }
+  if (changes.length === 1) {
+    const [change] = changes;
+    return change!.note ? `${change!.note} — ${change!.url} changed.` : `${change!.url} changed.`;
+  }
+  return [
+    `A few watched pages changed:`,
+    ...changes.map((c) => `  - ${c.note ? c.note + " — " : ""}${c.url}`),
+  ].join("\n");
+}
+
+/**
+ * Checking a watched page shouldn't ride the same push-interval tick as
+ * everything else — that's polite for polling our own database, not
+ * someone else's server. Rather than a second timer, each watch just
+ * decides for itself whether it's due, based on its own last_checked_at
+ * and LOOPDOG_WATCH_INTERVAL_MINUTES — same shape checkAtRiskNudge/
+ * checkWeeklyDigest/checkMorningBrief already use for their own hour/day
+ * gates inside this one shared tick.
+ */
+async function checkPageWatches(client: Client): Promise<void> {
+  const dueMs = config.watchIntervalMinutes * 60_000;
+  const now = Date.now();
+  const due = listWatches().filter(
+    (w) => w.last_checked_at === null || now - Date.parse(w.last_checked_at) >= dueMs,
+  );
+
+  const changed: { url: string; note: string | null }[] = [];
+  for (const watch of due) {
+    try {
+      const { text } = await fetchReadableText(watch.url);
+      const hash = createHash("sha256").update(text).digest("hex");
+      if (hash !== watch.content_hash) changed.push({ url: watch.url, note: watch.note });
+      updateWatchAfterCheck(watch.id, hash); // always updates, whether changed or not
+    } catch (error) {
+      console.error(`[pusher] failed to check watch ${watch.id} (${watch.url}):`, error);
+      // skip this one — retried once its interval is up again, same semantics as every other check
+    }
+  }
+  if (changed.length === 0) return;
+
+  try {
+    const owner = await client.users.fetch(config.ownerId);
+    await owner.send(formatWatchAlert(changed));
+  } catch (error) {
+    console.error("[pusher] failed to send watch alert:", error);
+  }
+}
+
 async function tick(client: Client): Promise<void> {
   if (getMuteUntil()) return; // vacation mode: skip every proactive DM this tick
   await checkAndPush(client);
   await checkAtRiskNudge(client);
   await checkWeeklyDigest(client);
   await checkMorningBrief(client);
+  await checkPageWatches(client);
 }
 
 /**
  * Starts the background poll for every kind of proactive DM: overdue
  * reminders (including rolling recurring ones forward, and holding off
  * during quiet hours), the once-daily at-risk habit nudge, the once-a-week
- * Sunday digest, and the once-daily morning brief — all of it suppressed
- * entirely while a vacation mute is active. Runs once immediately (so a
- * restart doesn't wait a full interval to catch anything that fell due
- * while the bot was down), then on a timer at LOOPDOG_PUSH_INTERVAL_MINUTES —
- * fine-grained enough to also catch "has the nudge/digest/brief hour
- * arrived" without extra timers.
+ * Sunday digest, the once-daily morning brief, and watched-page change
+ * alerts (each on its own, slower LOOPDOG_WATCH_INTERVAL_MINUTES cadence)
+ * — all of it suppressed entirely while a vacation mute is active. Runs
+ * once immediately (so a restart doesn't wait a full interval to catch
+ * anything that fell due while the bot was down), then on a timer at
+ * LOOPDOG_PUSH_INTERVAL_MINUTES — fine-grained enough to also catch "has
+ * the nudge/digest/brief/watch interval arrived" without extra timers.
  */
 export function startScheduler(client: Client): void {
   const intervalMs = config.pushIntervalMinutes * 60_000;
