@@ -43,6 +43,7 @@ import { getAnnouncements, getAssignments, getCourses, getGrades } from "./canva
 import { getWeekOverview } from "./overview";
 import { getMonthlySpending } from "./spending";
 import { listDevices, resolveDeviceFromList, setDevicePower } from "./tuya";
+import { getVacuumStatus, listVacuums, resolveVacuumFromList, startVacuum, stopVacuum, type RoborockDevice } from "./roborock";
 import { ToolError } from "./errors";
 
 export { ToolError };
@@ -1216,6 +1217,42 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["device", "on"],
     },
   },
+  {
+    name: "start_vacuum",
+    description:
+      "Start the Roborock vacuum cleaning. Call for 'start the vacuum' or " +
+      "'clean the house'. Omit 'vacuum' if there's only one — only needed " +
+      "to disambiguate when there's more than one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        vacuum: { type: "string", description: "The vacuum's name, if there's more than one." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "stop_vacuum",
+    description: "Stop the Roborock vacuum. Call for 'stop the vacuum'. Omit 'vacuum' if there's only one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        vacuum: { type: "string", description: "The vacuum's name, if there's more than one." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_vacuum_status",
+    description: "Get the Roborock vacuum's current status (cleaning state, battery, etc). Omit 'vacuum' if there's only one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        vacuum: { type: "string", description: "The vacuum's name, if there's more than one." },
+      },
+      required: [],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -1317,6 +1354,20 @@ function stringArray(input: Record<string, unknown>, key: string): string[] {
     throw new ToolError(`"${key}" is required and must be a non-empty array of strings`);
   }
   return value;
+}
+
+/**
+ * Resolves which vacuum a start/stop/status call means. An explicit name
+ * goes through the usual disambiguation; with none given, exactly one
+ * vacuum on the account picks itself, same "auto-pick if unambiguous"
+ * shape resolveEmailProvider already uses for email accounts.
+ */
+async function pickVacuum(query: string | undefined): Promise<RoborockDevice> {
+  const devices = await listVacuums();
+  if (query) return resolveVacuumFromList(devices, query);
+  if (devices.length === 1) return devices[0]!;
+  if (devices.length === 0) throw new ToolError("no vacuum found on this account");
+  throw new ToolError(`more than one vacuum (${devices.map((d) => d.name).join(", ")}) — specify which one`);
 }
 
 function bool(input: Record<string, unknown>, key: string): boolean {
@@ -1859,6 +1910,23 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const on = bool(input, "on");
       await setDevicePower(device.id, on);
       return { device: device.name, on };
+    }
+
+    case "start_vacuum": {
+      const vacuum = await pickVacuum(optionalStr(input, "vacuum"));
+      await startVacuum(vacuum);
+      return { vacuum: vacuum.name, started: true };
+    }
+
+    case "stop_vacuum": {
+      const vacuum = await pickVacuum(optionalStr(input, "vacuum"));
+      await stopVacuum(vacuum);
+      return { vacuum: vacuum.name, stopped: true };
+    }
+
+    case "get_vacuum_status": {
+      const vacuum = await pickVacuum(optionalStr(input, "vacuum"));
+      return { vacuum: vacuum.name, status: await getVacuumStatus(vacuum) };
     }
 
     default:

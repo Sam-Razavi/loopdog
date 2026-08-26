@@ -53,6 +53,8 @@ export interface Config {
   tuyaUid: string;
   /** Tuya is region-sharded; defaults to the EU data center, right for a Nordic-registered account. */
   tuyaApiEndpoint: string;
+  /** Optional — vacuum tools stay unavailable until set. The JSON UserData blob `npm run roborock-login` prints — an opaque session, not a scoped credential, same posture as TELEGRAM_SESSION. */
+  roborockUserData: string;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -215,6 +217,7 @@ export const config: Config = {
   tuyaAccessSecret: optional("TUYA_ACCESS_SECRET", ""),
   tuyaUid: optional("TUYA_UID", ""),
   tuyaApiEndpoint: optional("TUYA_API_ENDPOINT", "https://openapi.tuyaeu.com").replace(/\/+$/, ""),
+  roborockUserData: optional("ROBOROCK_USER_DATA", ""),
 };
 
 function report(problems: string[], hint: string): void {

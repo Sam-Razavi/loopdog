@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with sixty-eight tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with seventy-one tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -97,6 +97,9 @@ everything else.
 | `get_monthly_spending` | A spending metric totaled by calendar month, for comparing month over month |
 | `list_smart_devices` | List smart-home devices (DELTACO/Tuya smart plugs) and whether each is online |
 | `set_smart_device_power` | Turn a smart plug on or off |
+| `start_vacuum` | Start the Roborock vacuum cleaning |
+| `stop_vacuum` | Stop the Roborock vacuum |
+| `get_vacuum_status` | Get the vacuum's current status (cleaning state, battery, etc) |
 | `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
@@ -691,6 +694,47 @@ and device-resolution logic all work correctly — but whether the actual
 signature bytes pass Tuya's real validation can only be confirmed
 against a live account. Expect this one specifically to need a follow-up
 fix.
+
+### Roborock vacuum
+
+"Start the vacuum," "stop the vacuum," "what's the vacuum's battery" —
+controls a Roborock vacuum over Roborock's own cloud MQTT relay. Loopdog
+runs on Railway, not on your home network, so the faster, better-known
+local protocol (what Home Assistant uses — a direct connection to the
+vacuum's LAN IP) isn't reachable from here; this goes through the cloud
+instead. No in-conversation connect step: run `npm run roborock-login`
+once locally (needs an email verification code, the same way logging
+into the Roborock app the first time works), then paste the JSON it
+prints as `ROBOROCK_USER_DATA`. If there's only one vacuum on the
+account, its name doesn't need to be given at all.
+
+**Worth knowing — this one is unusually well-verified, not just
+disclosed-and-hoped:** every other integration in this project that hit a
+blocked documentation host had to be built from search snippets and
+shipped genuinely uncertain. This one was different — `python-roborock`
+(the most actively maintained open-source Roborock client) was cloned
+directly into the development session and its real source read line by
+line, not summarized from search results. The request-signing algorithm,
+message encryption, and MQTT topic structure below were then checked
+against the actual reference implementation, installed via `pip`, run
+side by side with this TypeScript code on identical inputs:
+
+- Every cryptographic primitive (timestamp encoding, AES-128-ECB message
+  key derivation, the full encrypted message format, the Hawk REST
+  signature, MQTT broker credentials) matches python-roborock's real
+  output **byte-for-byte** on fixed test vectors — not "should be right,"
+  confirmed identical.
+- The full command flow (list devices → connect over MQTT → send a
+  command → decode the response) was run end to end against a real
+  embedded MQTT broker and a mock REST API standing in for Roborock's own
+  — and this actually caught a real bug before shipping: Roborock's API
+  turns out to use two different response envelopes depending on the
+  endpoint's auth scheme, which the first draft got wrong. Fixed and
+  re-verified.
+
+What's still unconfirmed is only what no amount of local testing can
+resolve without a real account: whether Roborock's live servers accept
+requests built this way. Everything this environment could verify, it did.
 
 ### Web search
 
