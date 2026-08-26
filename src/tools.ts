@@ -37,6 +37,7 @@ import { findDepartures, planTrip } from "./transit";
 import { getElectricityOverview } from "./electricity";
 import { getActiveWarnings } from "./smhiwarnings";
 import { getWeather } from "./weather";
+import { listSwedishHolidays } from "./swedishholidays";
 import { ToolError } from "./errors";
 
 export { ToolError };
@@ -1051,6 +1052,22 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["id"],
     },
   },
+  {
+    name: "list_swedish_holidays",
+    description:
+      "List Sweden's official public holidays ('röda dagar') for a year — " +
+      "fixed dates, Easter-relative dates, and the two computed from a " +
+      "Saturday-in-range rule (Midsummer Day, All Saints' Day). Excludes " +
+      "non-official eve days like Christmas Eve. Call for 'is <date> a " +
+      "holiday in Sweden' or 'what red days are coming up'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        year: { type: "integer", description: "Defaults to the current year." },
+      },
+      required: [],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -1600,6 +1617,12 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "delete_journal_entry": {
       return { deleted: true, entry: deleteEntry(int(input, "id")) };
+    }
+
+    case "list_swedish_holidays": {
+      const currentYear = Number(localDay().slice(0, 4));
+      const year = optionalIntClamped(input, "year", currentYear, 1900, 2200);
+      return { year, holidays: listSwedishHolidays(year) };
     }
 
     default:

@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with fifty-seven tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with fifty-eight tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -87,6 +87,7 @@ everything else.
 | `plan_transit_trip` | Journey planning across SL + SJ + regional operators (optional, needs a key) |
 | `get_electricity_price` | Current Swedish electricity spot price, today's range, and the cheapest upcoming window |
 | `get_weather_warnings` | Active SMHI severe-weather warnings, nationwide or filtered to a county |
+| `list_swedish_holidays` | Sweden's official public holidays ("röda dagar") for a year |
 | `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
@@ -578,6 +579,19 @@ pinned down with full certainty from documentation alone; the parser is
 built from SMHI's own docs plus a real, working open-source parser as
 cross-reference, and written defensively throughout, but this is the one
 most likely to need a follow-up fix against a real response.
+
+### Swedish public holidays
+
+`list_swedish_holidays` answers "is that a red day" or "what red days are
+coming up" — Sweden's 13 official public holidays ("röda dagar") for a
+given year (default: this year), computed entirely in code rather than
+fetched from anywhere. Fixed dates (New Year's Day, Epiphany, May Day,
+National Day, Christmas), Easter-relative dates (Good Friday through Whit
+Sunday, via the standard Meeus/Jones/Butcher algorithm), and the two dates
+defined as "the Saturday within a date range" (Midsummer Day, All Saints'
+Day). Deliberately excludes non-official eve days like Christmas Eve —
+widely observed, but not on the official list. An on-demand answer only;
+not wired into reminders or the morning brief this round.
 
 ### Web search
 
