@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with sixty-one tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with sixty-two tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -85,6 +85,7 @@ everything else.
 | `clear_mute` | Resume proactive DMs early |
 | `get_transit_departures` | Real-time next departures from a Stockholm (SL) stop |
 | `plan_transit_trip` | Journey planning across SL + SJ + regional operators (optional, needs a key) |
+| `create_commute_reminder` | One-shot reminder timed to leave for the next departure at a stop |
 | `get_electricity_price` | Current Swedish electricity spot price, today's range, and the cheapest upcoming window |
 | `get_weather_warnings` | Active SMHI severe-weather warnings, nationwide or filtered to a county |
 | `list_swedish_holidays` | Sweden's official public holidays ("röda dagar") for a year |
@@ -542,6 +543,14 @@ Set `TRAFIKLAB_API_KEY`; leave it unset and the tool reports "not set up
 yet" (and, in conversation, Claude offers the departures tool instead if
 it's just one stop that's needed). Same unverified-in-this-sandbox
 caveat as above — this one couldn't be tested against a real key either.
+
+"Remind me when to leave for the bus" — `create_commute_reminder` glues
+the departures board above to a one-shot reminder: it looks up the next
+real departure from a stop right now, subtracts a lead time (walking time
+plus buffer), and schedules a plain reminder for that leave-by moment.
+Fires once for whatever's actually next, not a standing daily reminder —
+call it again each time. Same unverified-in-this-sandbox caveat as the
+departures board it's built on, since it depends on the same blocked host.
 
 ### Electricity spot prices
 

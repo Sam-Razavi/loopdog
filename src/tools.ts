@@ -34,6 +34,7 @@ import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
 import { fetchReadableText } from "./webfetch";
 import { searchWeb } from "./websearch";
 import { findDepartures, planTrip } from "./transit";
+import { createCommuteReminder } from "./commute";
 import { getElectricityOverview } from "./electricity";
 import { getActiveWarnings } from "./smhiwarnings";
 import { getWeather } from "./weather";
@@ -329,6 +330,31 @@ export const TOOLS: Anthropic.Tool[] = [
         to: { type: "string", description: "Destination — a stop, station, or place name." },
       },
       required: ["from", "to"],
+    },
+  },
+  {
+    name: "create_commute_reminder",
+    description:
+      "Creates a one-shot reminder timed to leave for the next departure " +
+      "from an SL stop, with a lead time to account for walking there. " +
+      "Call this for 'remind me when to leave for the bus/train' rather " +
+      "than get_transit_departures plus a manually-timed create_reminder. " +
+      "Looks up the next real departure at call time, so this fires once " +
+      "for whatever's next right now — not a standing daily reminder.",
+    input_schema: {
+      type: "object",
+      properties: {
+        stop: { type: "string", description: "The stop name, e.g. 'Odenplan' or 'T-Centralen'." },
+        lead_minutes: {
+          type: "integer",
+          description: "How many minutes before the departure to be reminded — walking time to the stop, plus buffer.",
+        },
+        transport: {
+          type: "string",
+          description: "Optional filter, e.g. 'BUS', 'METRO', 'TRAIN', 'TRAM', 'SHIP'. Omit to consider all.",
+        },
+      },
+      required: ["stop", "lead_minutes"],
     },
   },
   {
@@ -1361,6 +1387,12 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
     case "plan_transit_trip": {
       const result = await planTrip(str(input, "from"), str(input, "to"));
       return { untrusted: true, ...result };
+    }
+
+    case "create_commute_reminder": {
+      const leadMinutes = int(input, "lead_minutes");
+      const transportFilter = optionalStr(input, "transport");
+      return await createCommuteReminder(str(input, "stop"), leadMinutes, transportFilter);
     }
 
     case "get_electricity_price": {
