@@ -219,12 +219,12 @@ native compilation, exactly the kind of build fragility this project already hit
 once on Railway with `better-sqlite3`. No text baked into the image on purpose —
 Claude's reply carries the habit name and window, the picture stays simple.
 
-### Body measurements and calories
+### Body measurements, calories, and spending
 
 A separate, numeric-tracking system alongside boolean habits — weight, waist,
-chest, calories, anything that's "a number over time" rather than "did I do this."
-`log_metric` picks up a `unit` (`kg`, `cm`, `kcal`, …) and a `mode` the first time
-a metric is created:
+chest, calories, spending, anything that's "a number over time" rather than
+"did I do this." `log_metric` picks up a `unit` (`kg`, `cm`, `kcal`, `SEK`, …)
+and a `mode` the first time a metric is created:
 
 - **`latest`** (the default) — a fresh reading replaces the day's value. For
   weight, measurements, anything point-in-time.
@@ -238,6 +238,12 @@ Claude estimates it — reusing the image-aware replies above rather than needin
 you to count calories yourself. It says once that it's an estimate, then treats
 it like any other logged number. Same voice rules as everything else apply here
 too: no judgment about the number, whatever it is.
+
+The same photo pipeline covers receipts — no dedicated tool, no new schema,
+just `log_metric` doing what it already does. "Paid 342 kr at ICA for
+groceries" or a receipt photo logs a `sum`-mode metric the same way a
+calorie entry does; one general "expenses" metric or several by category is
+whatever fits how the conversation actually goes, not a fixed structure.
 
 "Show me my weight trend" gets a real trend-line PNG (`src/linechart.ts`, same
 `png.ts` encoder as habit charts), same no-text-baked-in philosophy.

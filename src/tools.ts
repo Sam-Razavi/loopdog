@@ -517,21 +517,27 @@ export const TOOLS: Anthropic.Tool[] = [
     name: "log_metric",
     description:
       "Record a numeric reading — a body measurement (weight, waist, chest), " +
-      "or a running total like calories. Call this for anything that's a " +
-      "number over time, not a yes/no habit. The habit is created automatically " +
-      "on first use, same as log_habit.\n\n" +
+      "a running total like calories, or spending. Call this for anything " +
+      "that's a number over time, not a yes/no habit. The habit is created " +
+      "automatically on first use, same as log_habit.\n\n" +
       "mode matters and is only set on the FIRST log of a new metric (later " +
       "calls ignore it, the metric keeps its original mode): " +
       "'latest' (the default) is for a point-in-time reading, like weight or a " +
       "measurement — each log replaces the day's value. 'sum' is for something " +
-      "that accumulates across multiple entries in a day, like calories or " +
-      "water — each log adds to the day's running total. Use 'sum' the first " +
-      "time you log a habit like calories; a single weight reading should stay " +
-      "'latest'.\n\n" +
+      "that accumulates across multiple entries in a day, like calories, " +
+      "water, or spending — each log adds to the day's running total. Use " +
+      "'sum' the first time you log a habit like calories or expenses; a " +
+      "single weight reading should stay 'latest'.\n\n" +
       "If the user describes a meal or shares a photo of one without giving an " +
       "exact number, estimate the calories yourself from what you can see or " +
       "read, and say in the note that it's an estimate — don't ask them to " +
-      "count calories themselves when a reasonable estimate is possible.",
+      "count calories themselves when a reasonable estimate is possible. Same " +
+      "for a receipt photo: read the total (and note what it was for) rather " +
+      "than asking the user to type it in. Pick a metric name that matches " +
+      "how the user talks about it — one general 'expenses' metric, or " +
+      "separate ones per category ('groceries', 'dining') if that's how " +
+      "they think about spending — whichever fits the conversation, not a " +
+      "fixed rule.",
     input_schema: {
       type: "object",
       properties: {
@@ -542,7 +548,7 @@ export const TOOLS: Anthropic.Tool[] = [
         value: { type: "number", description: "The number to log." },
         unit: {
           type: "string",
-          description: "e.g. 'kg', 'cm', 'kcal'. Only used the first time a metric is created.",
+          description: "e.g. 'kg', 'cm', 'kcal', 'SEK'. Only used the first time a metric is created.",
         },
         mode: {
           type: "string",
