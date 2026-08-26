@@ -47,6 +47,12 @@ export interface Config {
   /** Optional — Canvas tools stay unavailable (a plain ToolError on use) until both are set. Institution-specific, e.g. https://kth.instructure.com — no default possible. Token comes from Canvas's own Settings > New Access Token, not OAuth. */
   canvasBaseUrl: string;
   canvasApiToken: string;
+  /** Optional — smart-plug tools stay unavailable until all three are set. From a Cloud Project on Tuya's IoT developer platform, after linking the Smart Life/DELTACO app account. */
+  tuyaAccessId: string;
+  tuyaAccessSecret: string;
+  tuyaUid: string;
+  /** Tuya is region-sharded; defaults to the EU data center, right for a Nordic-registered account. */
+  tuyaApiEndpoint: string;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -205,6 +211,10 @@ export const config: Config = {
   smhiCounty: optional("LOOPDOG_SMHI_COUNTY", ""),
   canvasBaseUrl: optional("CANVAS_BASE_URL", "").replace(/\/+$/, ""),
   canvasApiToken: optional("CANVAS_API_TOKEN", ""),
+  tuyaAccessId: optional("TUYA_ACCESS_ID", ""),
+  tuyaAccessSecret: optional("TUYA_ACCESS_SECRET", ""),
+  tuyaUid: optional("TUYA_UID", ""),
+  tuyaApiEndpoint: optional("TUYA_API_ENDPOINT", "https://openapi.tuyaeu.com").replace(/\/+$/, ""),
 };
 
 function report(problems: string[], hint: string): void {

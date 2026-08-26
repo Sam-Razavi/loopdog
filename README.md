@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with sixty-six tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with sixty-eight tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -95,6 +95,8 @@ everything else.
 | `list_canvas_grades` | Current grades across all active Canvas courses |
 | `get_week_overview` | Reminders, important dates, holidays, and Canvas assignments in one view |
 | `get_monthly_spending` | A spending metric totaled by calendar month, for comparing month over month |
+| `list_smart_devices` | List smart-home devices (DELTACO/Tuya smart plugs) and whether each is online |
+| `set_smart_device_power` | Turn a smart plug on or off |
 | `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
@@ -656,6 +658,39 @@ against a local mock server standing in for a real Canvas instance
 parsing, HTML stripped from announcement text) — but not against an
 actual Canvas account, so this is the one most likely to need a
 follow-up fix once real data flows through it.
+
+### Smart plugs (DELTACO / Tuya)
+
+"Turn on the lamp," "turn off the coffee maker" — controls DELTACO smart
+plugs, which turn out to be rebranded Tuya hardware (confirmed via
+Tuya's own partnership announcement), so this goes through Tuya's Cloud
+API rather than anything DELTACO-specific. Needs `TUYA_ACCESS_ID`,
+`TUYA_ACCESS_SECRET`, and `TUYA_UID` from a Cloud Project on Tuya's IoT
+developer platform, with the Smart Life/DELTACO Smart app account linked
+to it. Leave any unset and the smart-device tools just report "not set
+up yet."
+
+The only tool category so far with a real physical-world effect rather
+than just reading or reminding — Loopdog only acts on a direct,
+unambiguous request in the conversation, same boundary that already
+governs untrusted content elsewhere, just named explicitly for this one.
+
+**Worth knowing, plainly:** this is genuinely the least-confident
+integration in the project. Tuya's own official Node SDK
+(`@tuya/tuya-connector-nodejs`) was installed, audited, and removed again
+before writing any integration code — it pins a severely outdated axios
+with a long list of unpatched high-severity CVEs, including cloud-
+metadata exfiltration via header injection, a real concern for a bot
+running on Railway. So this is hand-rolled against Tuya's HMAC-SHA256
+request-signing scheme instead, built from search-indexed doc excerpts
+(developer.tuya.com is blocked by this sandbox's egress proxy, same as
+every other real-world API doc host tried this session) rather than the
+primary source. Verified as far as this environment allows — a full
+mock-server round trip confirmed the token caching, header construction,
+and device-resolution logic all work correctly — but whether the actual
+signature bytes pass Tuya's real validation can only be confirmed
+against a live account. Expect this one specifically to need a follow-up
+fix.
 
 ### Web search
 
