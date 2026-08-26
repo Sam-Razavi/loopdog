@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with sixty-three tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with sixty-four tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -93,6 +93,7 @@ everything else.
 | `list_canvas_assignments` | Upcoming Canvas assignments with due dates, across all active courses |
 | `list_canvas_announcements` | Recent Canvas course announcements, newest first |
 | `list_canvas_grades` | Current grades across all active Canvas courses |
+| `get_week_overview` | Reminders, important dates, holidays, and Canvas assignments in one view |
 | `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
@@ -672,6 +673,16 @@ retrieval supports a specific day, a rolling window of recent days, or a
 plain text search across everything. Entirely user-initiated — Loopdog
 never brings up journaling on its own, no "want to write about your day?"
 after a rough one.
+
+### Week overview
+
+"What does my week look like" — pulls pending reminders, upcoming
+important dates, Swedish public holidays, and (if Canvas is set up)
+upcoming assignments into one call, instead of asking for each
+separately. Pure synthesis over data that already exists elsewhere — no
+new external calls of its own. If Canvas isn't configured, or a Canvas
+fetch fails, the rest of the overview still comes back; it just shows
+`canvas_assignments: null` rather than failing outright.
 
 ### Persistent memory
 

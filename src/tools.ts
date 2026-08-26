@@ -40,6 +40,7 @@ import { getActiveWarnings } from "./smhiwarnings";
 import { getWeather } from "./weather";
 import { listSwedishHolidays } from "./swedishholidays";
 import { getAnnouncements, getAssignments, getCourses, getGrades } from "./canvas";
+import { getWeekOverview } from "./overview";
 import { ToolError } from "./errors";
 
 export { ToolError };
@@ -1133,6 +1134,23 @@ export const TOOLS: Anthropic.Tool[] = [
       "Call for 'what's my grade in <course>' or 'how am I doing in my classes'.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
+  {
+    name: "get_week_overview",
+    description:
+      "Everything coming up: pending reminders, important dates, Swedish " +
+      "public holidays, and (if Canvas is set up) upcoming assignments, " +
+      "all in one call. Call this for 'what does my week look like' or " +
+      "'what's coming up' rather than calling list_reminders, " +
+      "list_important_dates, list_swedish_holidays, and " +
+      "list_canvas_assignments separately.",
+    input_schema: {
+      type: "object",
+      properties: {
+        days: { type: "integer", description: "How many days ahead to look. Defaults to 7." },
+      },
+      required: [],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -1712,6 +1730,12 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "list_canvas_grades": {
       return { untrusted: true, grades: await getGrades() };
+    }
+
+    case "get_week_overview": {
+      const days = optionalIntClamped(input, "days", 7, 1, 90);
+      const overview = await getWeekOverview(days);
+      return { untrusted: overview.canvas_assignments !== null, days, ...overview };
     }
 
     default:
