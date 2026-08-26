@@ -31,6 +31,7 @@ import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
 import { fetchReadableText } from "./webfetch";
 import { searchWeb } from "./websearch";
 import { findDepartures, planTrip } from "./transit";
+import { getElectricityOverview } from "./electricity";
 import { getWeather } from "./weather";
 import { ToolError } from "./errors";
 
@@ -322,6 +323,26 @@ export const TOOLS: Anthropic.Tool[] = [
         to: { type: "string", description: "Destination — a stop, station, or place name." },
       },
       required: ["from", "to"],
+    },
+  },
+  {
+    name: "get_electricity_price",
+    description:
+      "Current Swedish electricity spot price, today's range, and the " +
+      "cheapest upcoming 1-hour and 3-hour windows. Call this for 'what's " +
+      "the electricity price right now' or 'when's a good time to run " +
+      "the dishwasher/charge the car tonight'. No setup needed — defaults " +
+      "to the configured zone (Stockholm/SE3 unless changed).",
+    input_schema: {
+      type: "object",
+      properties: {
+        zone: {
+          type: "string",
+          enum: ["SE1", "SE2", "SE3", "SE4"],
+          description: "Swedish price zone. Omit to use the configured default.",
+        },
+      },
+      required: [],
     },
   },
   {
@@ -1098,6 +1119,10 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
     case "plan_transit_trip": {
       const result = await planTrip(str(input, "from"), str(input, "to"));
       return { untrusted: true, ...result };
+    }
+
+    case "get_electricity_price": {
+      return { untrusted: true, ...(await getElectricityOverview(optionalStr(input, "zone"))) };
     }
 
     case "web_search": {

@@ -171,6 +171,14 @@ CREATE TABLE IF NOT EXISTS hotmail_auth (
   updated_at       TEXT NOT NULL
 );
 
+-- Once per day the electricity-price nudge (opt-in via
+-- LOOPDOG_ELECTRICITY_NUDGE) has fired, or been evaluated with nothing to
+-- say. Same brand-new-table reasoning and shape as at_risk_nudges/digests.
+CREATE TABLE IF NOT EXISTS electricity_nudges (
+  day     TEXT PRIMARY KEY,            -- YYYY-MM-DD, 4am-adjusted local day
+  sent_at TEXT NOT NULL
+);
+
 -- Standing facts the user explicitly asked Loopdog to remember — distinct
 -- from conversation history, which only feeds the last ~20 turns into each
 -- response. Every memory here is injected into every system prompt, so

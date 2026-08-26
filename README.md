@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with forty-four tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with forty-five tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -85,6 +85,7 @@ everything else.
 | `clear_mute` | Resume proactive DMs early |
 | `get_transit_departures` | Real-time next departures from a Stockholm (SL) stop |
 | `plan_transit_trip` | Journey planning across SL + SJ + regional operators (optional, needs a key) |
+| `get_electricity_price` | Current Swedish electricity spot price, today's range, and the cheapest upcoming window |
 | `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
@@ -520,6 +521,24 @@ yet" (and, in conversation, Claude offers the departures tool instead if
 it's just one stop that's needed). Same unverified-in-this-sandbox
 caveat as above — this one couldn't be tested against a real key either.
 
+### Electricity spot prices
+
+Swedish day-ahead electricity pricing via [elprisetjustnu.se](https://www.elprisetjustnu.se)
+— free, no key, official Nord Pool data. `get_electricity_price` works out
+of the box: current price, today's range, and the cheapest upcoming 1-hour
+and 3-hour windows (a real sliding-window calculation, not just "current
+price," so it can actually answer "when's a good time to run the
+dishwasher tonight"). Defaults to zone SE3 (Stockholm) — override with
+`LOOPDOG_ELECTRICITY_ZONE` (SE1 north to SE4 south).
+
+Optional proactive nudge: set `LOOPDOG_ELECTRICITY_NUDGE=true` for a DM
+once a day when the price hits today's cheapest quarter. Off by default —
+this is a more opinionated proactive message than the on-demand tool, so
+it doesn't turn on just because the tool works.
+
+**Worth knowing:** same unverified-in-this-sandbox caveat as SL above —
+this host was also blocked by the sandbox this was built in.
+
 ### Web search
 
 `fetch_url` needs an exact URL already in hand; `web_search` is for "look
@@ -693,6 +712,8 @@ transcript up top happened — no Discord app was open for any of it.
 | `TELEGRAM_SESSION` | — | Optional. From `npm run telegram-login` — full account access, not a scoped token |
 | `TAVILY_API_KEY` | — | Optional. Enables `web_search` — free tier, no credit card, from tavily.com |
 | `TRAFIKLAB_API_KEY` | — | Optional. Enables `plan_transit_trip` — free signup at trafiklab.se |
+| `LOOPDOG_ELECTRICITY_ZONE` | `SE3` | Swedish electricity price zone, SE1-SE4 |
+| `LOOPDOG_ELECTRICITY_NUDGE` | `false` | Proactive DM when the price hits today's cheapest quarter |
 
 Missing variables are reported all at once at boot, by name.
 
@@ -731,6 +752,8 @@ src/
 ├── email.ts      tiny shared RFC822-message builder (google.ts + privatemail.ts)
 ├── telegram.ts   personal-account Telegram reads, via teleproto (read only)
 ├── telegram-login.ts  one-time interactive Telegram login (`npm run telegram-login`)
+├── transit.ts    SL departures (keyless) + Trafiklab/ResRobot trip planning (optional key)
+├── electricity.ts  Swedish electricity spot prices, via elprisetjustnu.se (keyless)
 └── db/           SQLite: reminders, habits, metrics, memories, watches, conversation history
 ```
 

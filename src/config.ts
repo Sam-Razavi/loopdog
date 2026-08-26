@@ -38,6 +38,10 @@ export interface Config {
   tavilyApiKey: string;
   /** Optional — plan_transit_trip stays unavailable until set. Free signup: https://www.trafiklab.se. get_transit_departures needs no key at all and works without this. */
   trafiklabApiKey: string;
+  /** Swedish electricity price zone, SE1-SE4. Defaults to SE3 (Stockholm) — get_electricity_price works out of the box, no signup needed. */
+  electricityZone: string;
+  /** Off by default — a price nudge is a more opinionated proactive DM than the on-demand tool, so it doesn't turn on just because the tool works. */
+  electricityNudgeEnabled: boolean;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -191,6 +195,8 @@ export const config: Config = {
   telegramSession: optional("TELEGRAM_SESSION", ""),
   tavilyApiKey: optional("TAVILY_API_KEY", ""),
   trafiklabApiKey: optional("TRAFIKLAB_API_KEY", ""),
+  electricityZone: optional("LOOPDOG_ELECTRICITY_ZONE", "SE3"),
+  electricityNudgeEnabled: optional("LOOPDOG_ELECTRICITY_NUDGE", "false").toLowerCase() === "true",
 };
 
 function report(problems: string[], hint: string): void {

@@ -20,6 +20,8 @@ import * as googleCalendar from "./google";
 import * as hotmail from "./hotmail";
 import { addDays, dayOfWeek, formatLocal, inQuietHours, localDay, localHour, localInstant } from "./time";
 import { sweepOldTempFilesIfDue } from "./tmpfiles";
+import { getPrices, isCurrentlyCheap } from "./electricity";
+import { hasElectricityNudgedToday, markElectricityNudged } from "./db/electricity";
 
 /**
  * Composed server-side, deliberately, not through Claude — same reasoning as
@@ -104,6 +106,44 @@ async function checkAtRiskNudge(client: Client): Promise<void> {
   } catch (error) {
     console.error("[pusher] failed to send at-risk nudge:", error);
     // not marked — retried next tick, same semantics as the reminder push
+  }
+}
+
+/**
+ * Opt-in (LOOPDOG_ELECTRICITY_NUDGE, default off) — a price nudge is a more
+ * opinionated proactive DM than the on-demand tool, so it doesn't turn on
+ * just because get_electricity_price works out of the box.
+ *
+ * Unlike checkAtRiskNudge, "cheap" is not monotonic across a day — the
+ * price now says nothing about the price in three hours — so a tick where
+ * it's *not* currently cheap does NOT mark the day handled the way an
+ * empty at-risk list does. The day is only marked once the nudge actually
+ * fires, so a genuinely cheap window later today still gets caught by a
+ * subsequent tick.
+ */
+async function checkElectricityNudge(client: Client): Promise<void> {
+  if (!config.electricityNudgeEnabled) return;
+
+  const today = localDay();
+  if (hasElectricityNudgedToday(today)) return;
+
+  let points: Awaited<ReturnType<typeof getPrices>>;
+  try {
+    points = await getPrices();
+  } catch (error) {
+    console.error("[pusher] failed to fetch electricity prices:", error);
+    return; // retried next tick — not marked, nothing was decided either way
+  }
+
+  if (!isCurrentlyCheap(points)) return; // not cheap right now — try again next tick
+
+  try {
+    const owner = await client.users.fetch(config.ownerId);
+    await owner.send("Electricity's cheap right now — good window for the dishwasher/laundry/charging.");
+    markElectricityNudged(today); // only after the send actually succeeds
+  } catch (error) {
+    console.error("[pusher] failed to send electricity nudge:", error);
+    // not marked — retried next tick, same semantics as the other checks
   }
 }
 
@@ -402,6 +442,7 @@ async function tick(client: Client): Promise<void> {
   if (getMuteUntil()) return; // vacation mode: skip every proactive DM this tick
   await checkAndPush(client);
   await checkAtRiskNudge(client);
+  await checkElectricityNudge(client);
   await checkWeeklyDigest(client);
   await checkMorningBrief(client);
   await checkPageWatches(client);
