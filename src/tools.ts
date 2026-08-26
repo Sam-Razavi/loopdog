@@ -39,7 +39,7 @@ import { getElectricityOverview } from "./electricity";
 import { getActiveWarnings } from "./smhiwarnings";
 import { getWeather } from "./weather";
 import { listSwedishHolidays } from "./swedishholidays";
-import { getAnnouncements, getAssignments, getCourses } from "./canvas";
+import { getAnnouncements, getAssignments, getCourses, getGrades } from "./canvas";
 import { ToolError } from "./errors";
 
 export { ToolError };
@@ -1126,6 +1126,13 @@ export const TOOLS: Anthropic.Tool[] = [
       required: [],
     },
   },
+  {
+    name: "list_canvas_grades",
+    description:
+      "List current grades across all active Canvas courses. " +
+      "Call for 'what's my grade in <course>' or 'how am I doing in my classes'.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -1701,6 +1708,10 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
     case "list_canvas_announcements": {
       const days = optionalIntClamped(input, "days", 14, 1, 90);
       return { untrusted: true, days, announcements: await getAnnouncements(days) };
+    }
+
+    case "list_canvas_grades": {
+      return { untrusted: true, grades: await getGrades() };
     }
 
     default:

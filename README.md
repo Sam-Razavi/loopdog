@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with sixty-two tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with sixty-three tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -92,6 +92,7 @@ everything else.
 | `list_canvas_courses` | Your active Canvas courses |
 | `list_canvas_assignments` | Upcoming Canvas assignments with due dates, across all active courses |
 | `list_canvas_announcements` | Recent Canvas course announcements, newest first |
+| `list_canvas_grades` | Current grades across all active Canvas courses |
 | `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
@@ -607,20 +608,21 @@ not wired into reminders or the morning brief this round.
 
 ### Canvas LMS
 
-Read-only access to your Canvas courses, upcoming assignments, and
-announcements — "what's due this week," "anything new posted for
-Databases." Needs `CANVAS_BASE_URL` (your institution's Canvas instance,
-e.g. `https://kth.instructure.com` — Canvas is hosted per-institution, so
-there's no single default) and `CANVAS_API_TOKEN` (a personal access
-token you generate yourself in Canvas's own settings, not OAuth). Leave
-either unset and the Canvas tools just report "not set up yet."
+Read-only access to your Canvas courses, upcoming assignments,
+announcements, and grades — "what's due this week," "anything new posted
+for Databases," "what's my grade in Algorithms." Needs `CANVAS_BASE_URL`
+(your institution's Canvas instance, e.g. `https://kth.instructure.com` —
+Canvas is hosted per-institution, so there's no single default) and
+`CANVAS_API_TOKEN` (a personal access token you generate yourself in
+Canvas's own settings, not OAuth). Leave either unset and the Canvas
+tools just report "not set up yet."
 
 **Worth knowing:** same unverified-in-this-sandbox-against-a-real-account
 caveat as the Sweden integrations — this sandbox's egress proxy blocks
 the Instructure documentation hosts too, so the exact response shapes are
 built from API doc excerpts rather than a live fetch. Verified end to end
 against a local mock server standing in for a real Canvas instance
-(correct auth header, query params, course/assignment/announcement
+(correct auth header, query params, course/assignment/announcement/grade
 parsing, HTML stripped from announcement text) — but not against an
 actual Canvas account, so this is the one most likely to need a
 follow-up fix once real data flows through it.

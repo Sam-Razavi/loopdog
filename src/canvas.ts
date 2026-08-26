@@ -4,8 +4,8 @@ import { extractReadableText } from "./webfetch";
 import { ToolError } from "./errors";
 
 /**
- * Canvas LMS (Instructure) — courses, assignments, and announcements, read
- * only. Every Canvas instance is institution-hosted (e.g.
+ * Canvas LMS (Instructure) — courses, assignments, announcements, and
+ * grades, read only. Every Canvas instance is institution-hosted (e.g.
  * https://kth.instructure.com), so there's no single host to test against
  * even in principle; on top of that, this sandbox's egress proxy blocks the
  * Instructure hosts reachable from documentation searches (canvas.instructure.com,
@@ -179,4 +179,49 @@ export async function getAnnouncements(days: number): Promise<CanvasAnnouncement
     start_date: `${addDays(localDay(), -days)}T00:00:00Z`,
   });
   return parseAnnouncements(Array.isArray(data) ? data : [], courseByContextCode);
+}
+
+export interface CanvasGrade {
+  course: string;
+  currentScore: number | null;
+  currentGrade: string | null;
+}
+
+/**
+ * Pure. `courseById` maps a numeric course id back to its name, since an
+ * enrollment object only carries course_id — same reasoning as
+ * parseAnnouncements' context-code map. Entries with no `grades` object at
+ * all (Canvas omits it for some enrollment types) are dropped rather than
+ * shown as an all-null grade.
+ */
+export function parseGrades(raw: unknown[], courseById: Map<number, string>): CanvasGrade[] {
+  const grades: CanvasGrade[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.course_id !== "number") continue;
+    const course = courseById.get(e.course_id);
+    if (!course) continue;
+    if (typeof e.grades !== "object" || e.grades === null) continue;
+    const g = e.grades as Record<string, unknown>;
+    grades.push({
+      course,
+      currentScore: typeof g.current_score === "number" ? g.current_score : null,
+      currentGrade: typeof g.current_grade === "string" ? g.current_grade : null,
+    });
+  }
+  return grades;
+}
+
+export async function getGrades(): Promise<CanvasGrade[]> {
+  const courses = await getCourses();
+  if (courses.length === 0) return [];
+
+  const courseById = new Map(courses.map((c) => [c.id, c.name]));
+  const data = await canvasGet("/api/v1/users/self/enrollments", {
+    "state[]": "active",
+    "include[]": "grades",
+    per_page: "100",
+  });
+  return parseGrades(Array.isArray(data) ? data : [], courseById);
 }

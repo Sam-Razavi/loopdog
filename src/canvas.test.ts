@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseAnnouncements, parseAssignments, parseCourses, withinWindow } from "./canvas";
+import { parseAnnouncements, parseAssignments, parseCourses, parseGrades, withinWindow } from "./canvas";
 
 test("parseCourses: keeps well-formed courses, drops malformed entries", () => {
   const raw = [
@@ -79,4 +79,22 @@ test("parseAnnouncements: resolves course names via context code, sorts newest f
   // extractReadableText replaces tags with a space, so the closing </b> before
   // the period leaves a space — same behavior as every other HTML source it parses.
   assert.equal(announcements[2]!.message, "See you Monday .");
+});
+
+test("parseGrades: resolves course names, drops entries with no grades object or an unknown course", () => {
+  const raw = [
+    { course_id: 101, grades: { current_score: 87.5, current_grade: "B+" } },
+    { course_id: 102 }, // no grades object at all
+    { course_id: 999, grades: { current_score: 50, current_grade: "F" } }, // unknown course id
+    { course_id: 101, grades: { current_grade: "A" } }, // score not a number, stays null
+  ];
+  const courseById = new Map([
+    [101, "Algorithms"],
+    [102, "Databases"],
+  ]);
+  const grades = parseGrades(raw, courseById);
+  assert.deepEqual(grades, [
+    { course: "Algorithms", currentScore: 87.5, currentGrade: "B+" },
+    { course: "Algorithms", currentScore: null, currentGrade: "A" },
+  ]);
 });
