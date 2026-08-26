@@ -104,7 +104,12 @@ export const TOOLS: Anthropic.Tool[] = [
     description:
       "Mark a reminder done. Call this when the user says they have finished " +
       "something. If they describe it rather than giving an id, call " +
-      "list_reminders first to find the right one.",
+      "list_reminders first to find the right one.\n\n" +
+      "A recurring reminder does not disappear when completed — it rolls " +
+      "forward to its next occurrence and the result comes back with " +
+      "rolled_forward: true and the new due time. Say so briefly (\"Done. " +
+      "Back tomorrow at 09:00.\") rather than implying it is finished for " +
+      "good. To actually stop a recurring reminder, use delete_reminder.",
     input_schema: {
       type: "object",
       properties: {
@@ -118,7 +123,9 @@ export const TOOLS: Anthropic.Tool[] = [
     description:
       "Delete a reminder outright. Use this only when the user wants to cancel " +
       "or undo something — a reminder they no longer need, or one created by " +
-      "mistake. Completing is the right call when they actually did the thing.",
+      "mistake. Completing is the right call when they actually did the thing. " +
+      "This is also how a recurring reminder is stopped for good, since " +
+      "completing one only rolls it forward to its next occurrence.",
     input_schema: {
       type: "object",
       properties: {

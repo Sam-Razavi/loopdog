@@ -42,6 +42,21 @@ export function migrate(): void {
   getDb().exec(SCHEMA);
   ensureColumn("reminders", "notified_at", "notified_at TEXT");
   ensureColumn("reminders", "recurrence", "recurrence TEXT");
+  backfillReminderCompletions();
+}
+
+/**
+ * Seeds reminder_completions from whatever reminders.completed_at already
+ * holds, so a database created before that table existed doesn't report zero
+ * completions in its next weekly digest. Idempotent via the unique index on
+ * (reminder_id, completed_at) — INSERT OR IGNORE makes re-running a no-op,
+ * same safe-on-every-boot property as ensureColumn above.
+ */
+function backfillReminderCompletions(): void {
+  getDb().exec(
+    `INSERT OR IGNORE INTO reminder_completions (reminder_id, completed_at)
+     SELECT id, completed_at FROM reminders WHERE completed_at IS NOT NULL`,
+  );
 }
 
 /**

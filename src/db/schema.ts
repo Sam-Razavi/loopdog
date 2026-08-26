@@ -16,6 +16,26 @@ CREATE TABLE IF NOT EXISTS reminders (
 CREATE INDEX IF NOT EXISTS idx_reminders_pending
   ON reminders(completed_at, due_at);
 
+-- One row per completion event, for both one-shot and recurring reminders.
+-- Recurring reminders never set reminders.completed_at (completing one rolls
+-- it forward to its next occurrence instead of tombstoning it), so
+-- completed_at alone would silently undercount the weekly digest's "N
+-- reminders done this week". This table is the count's source of truth.
+-- The unique index makes the one-time backfill in migrate() idempotent.
+CREATE TABLE IF NOT EXISTS reminder_completions (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  reminder_id  INTEGER NOT NULL,       -- deliberately not a FK: the count
+                                       -- should survive the reminder being
+                                       -- deleted later
+  completed_at TEXT NOT NULL           -- UTC ISO-8601
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reminder_completions_unique
+  ON reminder_completions(reminder_id, completed_at);
+
+CREATE INDEX IF NOT EXISTS idx_reminder_completions_when
+  ON reminder_completions(completed_at);
+
 CREATE TABLE IF NOT EXISTS habits (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   name       TEXT NOT NULL COLLATE NOCASE UNIQUE,

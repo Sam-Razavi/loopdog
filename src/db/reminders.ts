@@ -127,16 +127,64 @@ export function markNotified(id: number): void {
     .run(nowUtcIso(), id);
 }
 
-export function completeReminder(id: number): ReminderView | null {
+export interface CompletionResult {
+  reminder: ReminderView;
+  /** True when this was a recurring reminder that rolled forward rather than finishing. */
+  rolled_forward: boolean;
+}
+
+/**
+ * Marks a reminder done.
+ *
+ * A one-shot reminder completes and leaves the pending list, as before. A
+ * *recurring* one instead rolls forward to its next occurrence and stays
+ * pending — because every query in this file filters on
+ * `completed_at IS NULL`, setting it on a recurring reminder used to kill
+ * the recurrence permanently and silently: "remind me to stretch every day"
+ * survived exactly one "done". Stopping a recurring reminder for good is
+ * what deleteReminder is for.
+ *
+ * Either way a row lands in reminder_completions, so the weekly digest's
+ * count stays accurate for both kinds.
+ */
+export function completeReminder(id: number): CompletionResult | null {
   const existing = getReminder(id);
   if (!existing) return null;
-  if (existing.completed_at === null) {
-    getDb().prepare(`UPDATE reminders SET completed_at = ? WHERE id = ?`).run(
-      nowUtcIso(),
-      id,
-    );
+
+  const now = nowUtcIso();
+  recordCompletion(id, now);
+
+  if (existing.recurrence) {
+    return { reminder: rollForward(existing), rolled_forward: true };
   }
-  return view(getReminder(id)!);
+
+  if (existing.completed_at === null) {
+    getDb().prepare(`UPDATE reminders SET completed_at = ? WHERE id = ?`).run(now, id);
+  }
+  return { reminder: view(getReminder(id)!), rolled_forward: false };
+}
+
+function recordCompletion(reminderId: number, completedAt: string): void {
+  getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO reminder_completions (reminder_id, completed_at) VALUES (?, ?)`,
+    )
+    .run(reminderId, completedAt);
+}
+
+/**
+ * Moves a recurring reminder to its next occurrence and makes it
+ * push-eligible again. Shared by advanceRecurrence (the pusher's automatic
+ * roll after a push) and completeReminder (the user saying they did it) so
+ * the two can't drift apart.
+ */
+function rollForward(existing: ReminderRow): ReminderView {
+  const days = existing.recurrence === "daily" ? 1 : 7;
+  const nextDueAt = advanceLocalInstant(new Date(existing.due_at), days).toISOString();
+  getDb()
+    .prepare(`UPDATE reminders SET due_at = ?, notified_at = NULL WHERE id = ?`)
+    .run(nextDueAt, existing.id);
+  return view(getReminder(existing.id)!);
 }
 
 export function deleteReminder(id: number): ReminderView | null {
@@ -158,12 +206,7 @@ export function advanceRecurrence(id: number): ReminderView {
   if (!existing || !existing.recurrence) {
     throw new Error(`advanceRecurrence called on reminder ${id} with no recurrence set`);
   }
-  const days = existing.recurrence === "daily" ? 1 : 7;
-  const nextDueAt = advanceLocalInstant(new Date(existing.due_at), days).toISOString();
-  getDb()
-    .prepare(`UPDATE reminders SET due_at = ?, notified_at = NULL WHERE id = ?`)
-    .run(nextDueAt, id);
-  return view(getReminder(id)!);
+  return rollForward(existing);
 }
 
 /**
@@ -191,7 +234,7 @@ export function updateReminder(
 /** How many reminders were completed since a given UTC instant — for the weekly digest. */
 export function countCompletedSince(cutoffUtc: string): number {
   const row = getDb()
-    .prepare(`SELECT COUNT(*) AS n FROM reminders WHERE completed_at >= ?`)
+    .prepare(`SELECT COUNT(*) AS n FROM reminder_completions WHERE completed_at >= ?`)
     .get(cutoffUtc) as { n: number };
   return row.n;
 }
