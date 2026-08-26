@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with forty-six tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with fifty-one tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -116,6 +116,11 @@ everything else.
 | `remember` | Store a standing fact — a preference, an allergy, a detail worth keeping |
 | `list_memories` | Everything currently remembered |
 | `forget` | Delete a stored memory |
+| `add_shopping_items` | Add one or more items to the shopping list |
+| `list_shopping_items` | View the list — what's needed, checked, or all |
+| `set_shopping_item_checked` | Mark an item bought (or undo that) |
+| `remove_shopping_item` | Delete an item added by mistake |
+| `clear_checked_shopping_items` | Bulk-clear everything already checked off |
 
 ### Streaks
 
@@ -574,6 +579,14 @@ enable it; leave it unset and the tool just reports "not set up yet."
 Search results are external content, same as a fetched page or an email —
 see [Fetching and summarizing links](#fetching-and-summarizing-links) below
 for the "read, never obeyed" rule that governs all of it.
+
+### Shopping list
+
+A running, checkable list — distinct from reminders, which are timed and
+one-shot/recurring, not "things to pick up whenever." "Add milk and eggs
+to the list," "what's left to get," "got the milk," "clear the checked
+items" all just work in conversation. Checked items aren't deleted until
+cleared, so "what did I already get" still answers correctly mid-trip.
 
 ### Persistent memory
 

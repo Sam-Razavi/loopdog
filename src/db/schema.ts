@@ -189,6 +189,19 @@ CREATE TABLE IF NOT EXISTS smhi_warnings_seen (
   seen_at TEXT NOT NULL
 );
 
+-- A running, checkable shopping/grocery list — distinct from reminders,
+-- which are timed and one-shot/recurring, not "things to pick up whenever."
+-- checked_at NULL means still needed; append-only history otherwise (a
+-- checked item isn't deleted, just marked, so clear_checked can bulk-clear
+-- a finished trip in one step).
+CREATE TABLE IF NOT EXISTS shopping_items (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  item       TEXT NOT NULL,
+  note       TEXT,
+  checked_at TEXT,              -- NULL while still needed
+  created_at TEXT NOT NULL
+);
+
 -- Standing facts the user explicitly asked Loopdog to remember — distinct
 -- from conversation history, which only feeds the last ~20 turns into each
 -- response. Every memory here is injected into every system prompt, so

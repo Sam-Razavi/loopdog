@@ -18,6 +18,7 @@ import { clearMute, setMute } from "./db/mute";
 import { createWatch, deleteWatch, listWatches } from "./db/watches";
 import { getMetricHistory, listMetrics, logMetric, type MetricMode } from "./db/metrics";
 import { addMemory, forgetMemory, listMemories } from "./db/memories";
+import { addItems, clearChecked, listItems, removeItem, setChecked } from "./db/shopping";
 import { renderHabitChart } from "./chart";
 import { renderMetricChart } from "./linechart";
 import { findAssociation } from "./correlations";
@@ -878,6 +879,84 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["id"],
     },
   },
+  {
+    name: "add_shopping_items",
+    description:
+      "Add one or more items to the shopping/grocery list. Call this " +
+      "whenever the user mentions something to pick up or buy — 'add milk " +
+      "to the list', 'we need eggs and bread'. Not for timed things; use " +
+      "create_reminder for those instead.",
+    input_schema: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: { type: "string" },
+          description: "One or more item names, as the user said them.",
+        },
+        note: {
+          type: "string",
+          description: "Optional detail applying to all items added in this call, e.g. 'for the barbecue'.",
+        },
+      },
+      required: ["items"],
+    },
+  },
+  {
+    name: "list_shopping_items",
+    description:
+      "List the shopping list. Call this for 'what's on the list', or " +
+      "before checking/removing an item the user described by name rather " +
+      "than id.",
+    input_schema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["needed", "checked", "all"],
+          description: "Defaults to needed — what's still left to get.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "set_shopping_item_checked",
+    description:
+      "Mark a shopping list item bought (or, to undo a mistake, not " +
+      "bought). Call this when the user says they got something. A plain " +
+      "correction, not a big deal — same register as undo_habit_log.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "The item's id, from list_shopping_items." },
+        checked: { type: "boolean", description: "true to mark bought, false to undo that." },
+      },
+      required: ["id", "checked"],
+    },
+  },
+  {
+    name: "remove_shopping_item",
+    description:
+      "Delete a shopping list item outright — for one added by mistake. " +
+      "If the user actually got the item, set_shopping_item_checked is the " +
+      "right call instead.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "The item's id." },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "clear_checked_shopping_items",
+    description:
+      "Remove every item already checked off the list in one go — the " +
+      "'done with this shopping trip' moment. Call only when the user asks " +
+      "to clear the list, not routinely.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -1367,6 +1446,33 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "forget": {
       return forgetMemory(int(input, "id"));
+    }
+
+    case "add_shopping_items": {
+      return { items: addItems(stringArray(input, "items"), optionalStr(input, "note")) };
+    }
+
+    case "list_shopping_items": {
+      const status = optionalStr(input, "status") ?? "needed";
+      if (!["needed", "checked", "all"].includes(status)) {
+        throw new ToolError(`"status" must be needed, checked or all`);
+      }
+      return { items: listItems(status as "needed" | "checked" | "all") };
+    }
+
+    case "set_shopping_item_checked": {
+      const id = int(input, "id");
+      const checked = input.checked;
+      if (typeof checked !== "boolean") throw new ToolError(`"checked" is required and must be a boolean`);
+      return setChecked(id, checked);
+    }
+
+    case "remove_shopping_item": {
+      return { deleted: true, item: removeItem(int(input, "id")) };
+    }
+
+    case "clear_checked_shopping_items": {
+      return { cleared: clearChecked() };
     }
 
     default:
