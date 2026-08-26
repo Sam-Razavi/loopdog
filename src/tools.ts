@@ -38,6 +38,7 @@ import { getElectricityOverview } from "./electricity";
 import { getActiveWarnings } from "./smhiwarnings";
 import { getWeather } from "./weather";
 import { listSwedishHolidays } from "./swedishholidays";
+import { getAnnouncements, getAssignments, getCourses } from "./canvas";
 import { ToolError } from "./errors";
 
 export { ToolError };
@@ -1068,6 +1069,37 @@ export const TOOLS: Anthropic.Tool[] = [
       required: [],
     },
   },
+  {
+    name: "list_canvas_courses",
+    description: "List your active Canvas courses. Call for 'what courses am I in' or before referring to one by name.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "list_canvas_assignments",
+    description:
+      "List upcoming Canvas assignments with due dates, across all active courses, soonest first. " +
+      "Call for 'what's due soon' or 'what do I have for <course>'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        days: { type: "integer", description: "How many days ahead to look. Defaults to 14." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "list_canvas_announcements",
+    description:
+      "List recent Canvas course announcements across all active courses, newest first. " +
+      "Call for 'anything new on Canvas' or 'what did my professor post'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        days: { type: "integer", description: "How many days back to look. Defaults to 14." },
+      },
+      required: [],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -1623,6 +1655,20 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const currentYear = Number(localDay().slice(0, 4));
       const year = optionalIntClamped(input, "year", currentYear, 1900, 2200);
       return { year, holidays: listSwedishHolidays(year) };
+    }
+
+    case "list_canvas_courses": {
+      return { untrusted: true, courses: await getCourses() };
+    }
+
+    case "list_canvas_assignments": {
+      const days = optionalIntClamped(input, "days", 14, 1, 90);
+      return { untrusted: true, days, assignments: await getAssignments(days) };
+    }
+
+    case "list_canvas_announcements": {
+      const days = optionalIntClamped(input, "days", 14, 1, 90);
+      return { untrusted: true, days, announcements: await getAnnouncements(days) };
     }
 
     default:

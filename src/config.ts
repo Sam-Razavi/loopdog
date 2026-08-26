@@ -44,6 +44,9 @@ export interface Config {
   electricityNudgeEnabled: boolean;
   /** Optional, no default. get_weather_warnings works unfiltered (all active warnings, nationwide) without this; the proactive check does nothing until it's set, since there's no sensible region to default to watching. */
   smhiCounty: string;
+  /** Optional — Canvas tools stay unavailable (a plain ToolError on use) until both are set. Institution-specific, e.g. https://kth.instructure.com — no default possible. Token comes from Canvas's own Settings > New Access Token, not OAuth. */
+  canvasBaseUrl: string;
+  canvasApiToken: string;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -200,6 +203,8 @@ export const config: Config = {
   electricityZone: optional("LOOPDOG_ELECTRICITY_ZONE", "SE3"),
   electricityNudgeEnabled: optional("LOOPDOG_ELECTRICITY_NUDGE", "false").toLowerCase() === "true",
   smhiCounty: optional("LOOPDOG_SMHI_COUNTY", ""),
+  canvasBaseUrl: optional("CANVAS_BASE_URL", "").replace(/\/+$/, ""),
+  canvasApiToken: optional("CANVAS_API_TOKEN", ""),
 };
 
 function report(problems: string[], hint: string): void {
