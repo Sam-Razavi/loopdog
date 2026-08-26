@@ -30,7 +30,7 @@ import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
 import { fetchReadableText } from "./webfetch";
 import { searchWeb } from "./websearch";
-import { findDepartures } from "./transit";
+import { findDepartures, planTrip } from "./transit";
 import { getWeather } from "./weather";
 import { ToolError } from "./errors";
 
@@ -289,7 +289,7 @@ export const TOOLS: Anthropic.Tool[] = [
       "questions. If the stop name matches more than one real stop, this " +
       "fails listing the candidates — ask the user which one rather than " +
       "guessing. For journeys between two places rather than one stop's " +
-      "board, use plan_transit_trip instead, once that's set up.",
+      "board, use plan_transit_trip instead.",
     input_schema: {
       type: "object",
       properties: {
@@ -304,6 +304,24 @@ export const TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ["stop"],
+    },
+  },
+  {
+    name: "plan_transit_trip",
+    description:
+      "Plan a journey between two places across Sweden's public transit " +
+      "operators — SL, SJ trains, regional buses and trains, not just " +
+      "Stockholm. Call this for 'how do I get from X to Y' rather than a " +
+      "single stop's departure board (use get_transit_departures for " +
+      "that). Fails with a plain error if not set up yet — a separate, " +
+      "optional API key from get_transit_departures.",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "Starting point — a stop, station, or place name." },
+        to: { type: "string", description: "Destination — a stop, station, or place name." },
+      },
+      required: ["from", "to"],
     },
   },
   {
@@ -1074,6 +1092,11 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const maxResults = optionalIntClamped(input, "max_results", 10, 1, 30);
       const transportFilter = optionalStr(input, "transport");
       const result = await findDepartures(str(input, "stop"), maxResults, transportFilter);
+      return { untrusted: true, ...result };
+    }
+
+    case "plan_transit_trip": {
+      const result = await planTrip(str(input, "from"), str(input, "to"));
       return { untrusted: true, ...result };
     }
 

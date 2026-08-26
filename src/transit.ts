@@ -165,3 +165,131 @@ export async function findDepartures(
 export function _resetSiteListCacheForTests(): void {
   siteListCache = null;
 }
+// --- Trip planning across operators (SL + SJ + regional), via Trafiklab's
+// ResRobot API. Needs a free API key, unlike the departures board above —
+// this is the one piece of this file that couldn't be exercised at all
+// during development, not even against a real (blocked) host: no key was
+// available to test with either. Code-complete, unverified against a real
+// account, same honesty as Hotmail/PrivateMail/Telegram's first ship. -----
+
+const RESROBOT_LOCATION_URL = "https://api.resrobot.se/v2.1/location.name";
+const RESROBOT_TRIP_URL = "https://api.resrobot.se/v2.1/trip";
+
+function requireTrafiklabKey(): string {
+  if (!config.trafiklabApiKey) {
+    throw new ToolError("Trip planning isn't set up yet — TRAFIKLAB_API_KEY isn't configured.");
+  }
+  return config.trafiklabApiKey;
+}
+
+interface ResRobotStop {
+  id?: string;
+  name?: string;
+}
+
+async function resolveResRobotStop(query: string): Promise<{ id: string; name: string }> {
+  const apiKey = requireTrafiklabKey();
+  const url = new URL(RESROBOT_LOCATION_URL);
+  url.searchParams.set("input", query);
+  url.searchParams.set("accessId", apiKey);
+  url.searchParams.set("format", "json");
+
+  let response: Response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  } catch (error) {
+    throw new ToolError(`couldn't reach the trip planner: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!response.ok) throw new ToolError(`couldn't look up "${query}" (HTTP ${response.status})`);
+
+  const data = (await response.json()) as { stopLocationOrCoordLocation?: { StopLocation?: ResRobotStop }[] };
+  const first = data.stopLocationOrCoordLocation?.find((entry) => entry.StopLocation?.id)?.StopLocation;
+  if (!first?.id) throw new ToolError(`no place matching "${query}"`);
+  return { id: first.id, name: first.name ?? query };
+}
+
+export interface TripLeg {
+  mode: string;
+  line: string | null;
+  origin: string;
+  destination: string;
+  departure: string | null;
+  arrival: string | null;
+}
+
+export interface TripPlan {
+  origin: string;
+  destination: string;
+  legs: TripLeg[];
+  departure: string | null;
+  arrival: string | null;
+}
+
+interface ResRobotLeg {
+  name?: string;
+  type?: string;
+  Origin?: { name?: string; time?: string; date?: string };
+  Destination?: { name?: string; time?: string; date?: string };
+}
+
+interface ResRobotTripResponse {
+  Trip?: { LegList?: { Leg?: ResRobotLeg[] } }[];
+}
+
+/**
+ * ResRobot returns date/time as plain local (Europe/Stockholm) values with
+ * no UTC offset attached — toUtcIso() would reject that outright (it
+ * requires an explicit offset, by design, to avoid guessing at ambiguous
+ * local times elsewhere in this codebase). There is nothing to guess here:
+ * every other "local time" Loopdog surfaces already means the configured
+ * zone, so this is returned the same way rather than forced through a
+ * conversion that would just fail and silently null out every leg.
+ */
+function combineDateTime(date: string | undefined, time: string | undefined): string | null {
+  if (!date || !time) return null;
+  return `${date}T${time}`;
+}
+
+export async function planTrip(originQuery: string, destQuery: string): Promise<TripPlan> {
+  const apiKey = requireTrafiklabKey();
+  const [origin, dest] = await Promise.all([
+    resolveResRobotStop(originQuery),
+    resolveResRobotStop(destQuery),
+  ]);
+
+  const url = new URL(RESROBOT_TRIP_URL);
+  url.searchParams.set("originId", origin.id);
+  url.searchParams.set("destId", dest.id);
+  url.searchParams.set("accessId", apiKey);
+  url.searchParams.set("format", "json");
+
+  let response: Response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  } catch (error) {
+    throw new ToolError(`couldn't reach the trip planner: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!response.ok) throw new ToolError(`couldn't plan that trip (HTTP ${response.status})`);
+
+  const data = (await response.json()) as ResRobotTripResponse;
+  const firstTrip = data.Trip?.[0];
+  const legs = firstTrip?.LegList?.Leg ?? [];
+  if (legs.length === 0) throw new ToolError(`no route found from "${origin.name}" to "${dest.name}"`);
+
+  const mapped: TripLeg[] = legs.map((leg) => ({
+    mode: leg.type ?? "unknown",
+    line: leg.name ?? null,
+    origin: leg.Origin?.name ?? origin.name,
+    destination: leg.Destination?.name ?? dest.name,
+    departure: combineDateTime(leg.Origin?.date, leg.Origin?.time),
+    arrival: combineDateTime(leg.Destination?.date, leg.Destination?.time),
+  }));
+
+  return {
+    origin: origin.name,
+    destination: dest.name,
+    legs: mapped,
+    departure: mapped[0]?.departure ?? null,
+    arrival: mapped[mapped.length - 1]?.arrival ?? null,
+  };
+}

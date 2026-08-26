@@ -36,6 +36,8 @@ export interface Config {
   telegramSession: string;
   /** Optional — web_search stays unavailable (a plain ToolError on use) until set. Free tier, no credit card: https://tavily.com. */
   tavilyApiKey: string;
+  /** Optional — plan_transit_trip stays unavailable until set. Free signup: https://www.trafiklab.se. get_transit_departures needs no key at all and works without this. */
+  trafiklabApiKey: string;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -188,6 +190,7 @@ export const config: Config = {
   telegramApiHash: optional("TELEGRAM_API_HASH", ""),
   telegramSession: optional("TELEGRAM_SESSION", ""),
   tavilyApiKey: optional("TAVILY_API_KEY", ""),
+  trafiklabApiKey: optional("TRAFIKLAB_API_KEY", ""),
 };
 
 function report(problems: string[], hint: string): void {

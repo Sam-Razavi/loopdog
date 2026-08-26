@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with forty-three tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with forty-four tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -84,6 +84,7 @@ everything else.
 | `set_mute` | Pause every proactive DM until a given time |
 | `clear_mute` | Resume proactive DMs early |
 | `get_transit_departures` | Real-time next departures from a Stockholm (SL) stop |
+| `plan_transit_trip` | Journey planning across SL + SJ + regional operators (optional, needs a key) |
 | `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
@@ -510,6 +511,15 @@ sandbox this was built in blocked the host outright). Parsing is written
 defensively for exactly that reason; the first real conversation against
 a live stop is this integration's actual first test.
 
+For journeys between two places rather than one stop's board — "how do I
+get from Stockholm to Gothenburg," spanning SL, SJ trains, and regional
+operators — `plan_transit_trip` uses Trafiklab's ResRobot API instead,
+which needs a separate, free API key from [trafiklab.se](https://www.trafiklab.se).
+Set `TRAFIKLAB_API_KEY`; leave it unset and the tool reports "not set up
+yet" (and, in conversation, Claude offers the departures tool instead if
+it's just one stop that's needed). Same unverified-in-this-sandbox
+caveat as above — this one couldn't be tested against a real key either.
+
 ### Web search
 
 `fetch_url` needs an exact URL already in hand; `web_search` is for "look
@@ -682,6 +692,7 @@ transcript up top happened — no Discord app was open for any of it.
 | `TELEGRAM_API_HASH` | — | Optional, paired with `TELEGRAM_API_ID` |
 | `TELEGRAM_SESSION` | — | Optional. From `npm run telegram-login` — full account access, not a scoped token |
 | `TAVILY_API_KEY` | — | Optional. Enables `web_search` — free tier, no credit card, from tavily.com |
+| `TRAFIKLAB_API_KEY` | — | Optional. Enables `plan_transit_trip` — free signup at trafiklab.se |
 
 Missing variables are reported all at once at boot, by name.
 
