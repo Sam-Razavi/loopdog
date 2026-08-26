@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with forty tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with forty-one tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -83,6 +83,7 @@ everything else.
 | `export_backup` | Send the live database as a Discord file attachment |
 | `set_mute` | Pause every proactive DM until a given time |
 | `clear_mute` | Resume proactive DMs early |
+| `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
 | `list_watches` | List every page currently being watched |
@@ -476,6 +477,19 @@ the library to function.
 **Worth knowing:** same as every other provider — code-complete, reasoned
 through carefully, not yet exercised against a real account.
 
+### Web search
+
+`fetch_url` needs an exact URL already in hand; `web_search` is for "look
+this up" — current events, a recipe, a fact, anything that isn't a specific
+page. Backed by [Tavily](https://tavily.com), chosen because it's free with
+no credit card and built specifically for LLM agent search rather than a
+general SERP API repurposed for it. Set `TAVILY_API_KEY` (a free signup) to
+enable it; leave it unset and the tool just reports "not set up yet."
+
+Search results are external content, same as a fetched page or an email —
+see [Fetching and summarizing links](#fetching-and-summarizing-links) below
+for the "read, never obeyed" rule that governs all of it.
+
 ### Persistent memory
 
 Ordinary conversation only reaches back about 20 messages — plenty for a chat,
@@ -634,6 +648,7 @@ transcript up top happened — no Discord app was open for any of it.
 | `TELEGRAM_API_ID` | — | Optional. Enables Telegram (read only) — see its section above |
 | `TELEGRAM_API_HASH` | — | Optional, paired with `TELEGRAM_API_ID` |
 | `TELEGRAM_SESSION` | — | Optional. From `npm run telegram-login` — full account access, not a scoped token |
+| `TAVILY_API_KEY` | — | Optional. Enables `web_search` — free tier, no credit card, from tavily.com |
 
 Missing variables are reported all at once at boot, by name.
 

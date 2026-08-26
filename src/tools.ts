@@ -28,6 +28,7 @@ import { gatherWeekSummary } from "./pusher";
 import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
 import { fetchReadableText } from "./webfetch";
+import { searchWeb } from "./websearch";
 import { getWeather } from "./weather";
 import { ToolError } from "./errors";
 
@@ -276,6 +277,29 @@ export const TOOLS: Anthropic.Tool[] = [
       "Resume proactive DMs immediately. Call when the user says they're back, " +
       "or wants nudges again before a mute would naturally expire.",
     input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "web_search",
+    description:
+      "Search the live web and get back results with titles, URLs, and " +
+      "short excerpts, plus a synthesized short answer when the search " +
+      "engine is confident enough to give one. Call this when the user " +
+      "asks something that needs current or general information you don't " +
+      "already have — 'what's the score of last night's game', 'find me a " +
+      "recipe for X', 'who is Y' — anything that isn't already a specific " +
+      "URL (use fetch_url for that) and isn't already covered by a more " +
+      "specific tool (weather, currency, calendar, email, etc.).",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "What to search for." },
+        max_results: {
+          type: "integer",
+          description: "How many results to return. Defaults to 5.",
+        },
+      },
+      required: ["query"],
+    },
   },
   {
     name: "fetch_url",
@@ -988,6 +1012,11 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "clear_mute": {
       return { cleared: clearMute() };
+    }
+
+    case "web_search": {
+      const maxResults = optionalIntClamped(input, "max_results", 5, 1, 10);
+      return { untrusted: true, max_results: maxResults, ...(await searchWeb(str(input, "query"), maxResults)) };
     }
 
     case "fetch_url": {

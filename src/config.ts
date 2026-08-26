@@ -34,6 +34,8 @@ export interface Config {
   telegramApiId: string;
   telegramApiHash: string;
   telegramSession: string;
+  /** Optional — web_search stays unavailable (a plain ToolError on use) until set. Free tier, no credit card: https://tavily.com. */
+  tavilyApiKey: string;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -185,6 +187,7 @@ export const config: Config = {
   telegramApiId: optional("TELEGRAM_API_ID", ""),
   telegramApiHash: optional("TELEGRAM_API_HASH", ""),
   telegramSession: optional("TELEGRAM_SESSION", ""),
+  tavilyApiKey: optional("TAVILY_API_KEY", ""),
 };
 
 function report(problems: string[], hint: string): void {
