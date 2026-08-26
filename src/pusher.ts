@@ -31,6 +31,8 @@ import {
   type ImportantDateView,
   type NudgeKind,
 } from "./db/importantdates";
+import { getAssignments, type CanvasAssignment } from "./canvas";
+import { listSwedishHolidays, type SwedishHoliday } from "./swedishholidays";
 
 /**
  * Composed server-side, deliberately, not through Claude — same reasoning as
@@ -257,11 +259,13 @@ export interface WeeklyHabitStat extends HabitSummary {
  * formatters exist only because there's no live Claude turn to phrase an
  * unattended message).
  */
-export function gatherWeekSummary(): {
+export async function gatherWeekSummary(): Promise<{
   habits: WeeklyHabitStat[];
   remindersCompleted: number;
   remindersPending: number;
-} {
+  upcomingAssignments: CanvasAssignment[];
+  upcomingHolidays: SwedishHoliday[];
+}> {
   const counts = weeklyLogCounts();
   const habits = listHabits().map((h) => ({ ...h, days_logged: counts.get(h.name) ?? 0 }));
   const today = localDay();
@@ -270,6 +274,8 @@ export function gatherWeekSummary(): {
     habits,
     remindersCompleted: countCompletedSince(weekAgoUtc),
     remindersPending: listReminders({ status: "pending", limit: 1000 }).length,
+    upcomingAssignments: await canvasAssignmentsOrEmpty(7),
+    upcomingHolidays: holidaysWithin(7, today),
   };
 }
 
@@ -283,6 +289,8 @@ export function formatDigest(
   habits: WeeklyHabitStat[],
   remindersCompleted: number,
   remindersPending: number,
+  upcomingAssignments: CanvasAssignment[] = [],
+  upcomingHolidays: SwedishHoliday[] = [],
 ): string {
   const lines: string[] = [`Week in review:`];
   if (habits.length === 0) {
@@ -296,6 +304,11 @@ export function formatDigest(
     `${remindersCompleted} reminder${remindersCompleted === 1 ? "" : "s"} done this week, ` +
       `${remindersPending} still open.`,
   );
+  if (upcomingAssignments.length || upcomingHolidays.length) {
+    lines.push(`Coming up this week:`);
+    lines.push(...upcomingAssignments.map((a) => `  - ${a.name} (${a.course}, due ${a.dueAt.slice(0, 10)})`));
+    lines.push(...upcomingHolidays.map((h) => `  - ${h.name} (${h.date})`));
+  }
   return lines.join("\n");
 }
 
@@ -307,8 +320,14 @@ async function checkWeeklyDigest(client: Client): Promise<void> {
 
   try {
     const owner = await client.users.fetch(config.ownerId);
-    const data = gatherWeekSummary();
-    const message = formatDigest(data.habits, data.remindersCompleted, data.remindersPending);
+    const data = await gatherWeekSummary();
+    const message = formatDigest(
+      data.habits,
+      data.remindersCompleted,
+      data.remindersPending,
+      data.upcomingAssignments,
+      data.upcomingHolidays,
+    );
     await owner.send(message);
     markDigested(today); // only after the send actually succeeds
   } catch (error) {
@@ -323,20 +342,56 @@ function formatEventTime(iso: string): string {
   return formatLocal(new Date(iso));
 }
 
+/**
+ * Non-fatal Canvas fetch, shared by the morning brief and the weekly
+ * digest below — Canvas being unconfigured or erroring never blocks
+ * either message, same posture as the Google Calendar fetch already has.
+ */
+async function canvasAssignmentsOrEmpty(days: number): Promise<CanvasAssignment[]> {
+  if (!config.canvasBaseUrl || !config.canvasApiToken) return [];
+  try {
+    return await getAssignments(days);
+  } catch (error) {
+    console.error("[pusher] failed to fetch Canvas assignments:", error);
+    return [];
+  }
+}
+
+/** Swedish holidays falling within `days` days of `today` (inclusive) — spans a year boundary correctly. */
+function holidaysWithin(days: number, today: string): SwedishHoliday[] {
+  const cutoff = addDays(today, days);
+  const thisYear = Number(today.slice(0, 4));
+  const nextYear = Number(cutoff.slice(0, 4));
+  const all = thisYear === nextYear ? listSwedishHolidays(thisYear) : [...listSwedishHolidays(thisYear), ...listSwedishHolidays(nextYear)];
+  return all.filter((h) => h.date >= today && h.date <= cutoff);
+}
+
 export function formatMorningBrief(
   reminders: ReminderView[],
   atRisk: HabitSummary[],
   events: googleCalendar.CalendarEvent[] = [],
+  canvasAssignmentsDueToday: CanvasAssignment[] = [],
+  holidayToday: string | null = null,
 ): string {
-  if (reminders.length === 0 && atRisk.length === 0 && events.length === 0) {
+  if (
+    reminders.length === 0 &&
+    atRisk.length === 0 &&
+    events.length === 0 &&
+    canvasAssignmentsDueToday.length === 0 &&
+    !holidayToday
+  ) {
     throw new Error("formatMorningBrief called with nothing to say");
   }
   const lines: string[] = [];
+  if (holidayToday) lines.push(`Today's a public holiday: ${holidayToday}.`);
   if (events.length) {
     lines.push(`On the calendar today:`, ...events.map((e) => `  - ${e.summary} (${formatEventTime(e.start)})`));
   }
   if (reminders.length) {
     lines.push(`Due today:`, ...reminders.map((r) => `  - ${r.text} (${r.due_local})`));
+  }
+  if (canvasAssignmentsDueToday.length) {
+    lines.push(`Due on Canvas today:`, ...canvasAssignmentsDueToday.map((a) => `  - ${a.name} (${a.course})`));
   }
   if (atRisk.length) {
     lines.push(`At risk:`, ...atRisk.map((h) => `  - ${h.name} (${h.current_streak} days)`));
@@ -365,7 +420,16 @@ async function checkMorningBrief(client: Client): Promise<void> {
     }
   }
 
-  if (dueToday.length === 0 && atRisk.length === 0 && events.length === 0) {
+  const canvasAssignmentsDueToday = (await canvasAssignmentsOrEmpty(0)).filter((a) => a.dueAt.slice(0, 10) === today);
+  const holidayToday = holidaysWithin(0, today)[0]?.name ?? null;
+
+  if (
+    dueToday.length === 0 &&
+    atRisk.length === 0 &&
+    events.length === 0 &&
+    canvasAssignmentsDueToday.length === 0 &&
+    !holidayToday
+  ) {
     // Nothing to say this morning — mark handled, same "stay quiet" pattern
     // the at-risk nudge already uses for an empty result.
     markBriefed(today);
@@ -374,7 +438,7 @@ async function checkMorningBrief(client: Client): Promise<void> {
 
   try {
     const owner = await client.users.fetch(config.ownerId);
-    await owner.send(formatMorningBrief(dueToday, atRisk, events));
+    await owner.send(formatMorningBrief(dueToday, atRisk, events, canvasAssignmentsDueToday, holidayToday));
     markBriefed(today); // only after the send actually succeeds
   } catch (error) {
     console.error("[pusher] failed to send morning brief:", error);
@@ -553,9 +617,11 @@ async function tick(client: Client): Promise<void> {
  * Starts the background poll for every kind of proactive DM: overdue
  * reminders (including rolling recurring ones forward, and holding off
  * during quiet hours), the once-daily at-risk habit nudge, the opt-in
- * electricity cheap-hour nudge, the once-a-week Sunday digest, the
- * once-daily morning brief, and watched-page change alerts (each on its
- * own, slower LOOPDOG_WATCH_INTERVAL_MINUTES cadence) — all of it
+ * electricity cheap-hour nudge, the once-a-week Sunday digest (now also
+ * folding in Canvas assignments and Swedish holidays due in the coming
+ * week, when Canvas is configured), the once-daily morning brief (same
+ * enrichment, for today specifically), and watched-page change alerts
+ * (each on its own, slower LOOPDOG_WATCH_INTERVAL_MINUTES cadence) — all of it
  * suppressed entirely while a vacation mute is active. Two things bypass
  * the mute gate, each for its own reason: finishing a Google or Hotmail
  * connection the user explicitly started isn't an unprompted nudge (runs

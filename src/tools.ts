@@ -1378,7 +1378,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
     }
 
     case "week_summary": {
-      return gatherWeekSummary();
+      return await gatherWeekSummary();
     }
 
     case "undo_habit_log": {

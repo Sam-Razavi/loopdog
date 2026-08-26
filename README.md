@@ -175,10 +175,11 @@ preference. Set both variables to the same value to turn it off entirely.
 
 Once a day, around `LOOPDOG_MORNING_BRIEF_HOUR` (default 08:00 local), Loopdog sends
 one DM gathering what's due today and what's at risk into a single message, instead
-of it trickling in separately throughout the day. If Google is connected
-(see below), today's calendar events lead the message, ahead of reminders and
-habits. If
-there's genuinely nothing to say, it stays quiet. Fires at most once per day.
+of it trickling in separately throughout the day. If today's a Swedish public
+holiday, that leads the message. If Google is connected (see below), today's
+calendar events come next, ahead of reminders, Canvas assignments due today
+(if Canvas is set up), and habits. If there's genuinely nothing to say, it
+stays quiet. Fires at most once per day.
 
 ### Vacation / mute mode
 
@@ -286,9 +287,12 @@ hard rejection from Anthropic's API, not a soft one.
 Once a week, around `LOOPDOG_DIGEST_HOUR` (default 20:00 local) on Sundays, Loopdog
 sends a plain recap: how many of the last 7 days each habit was logged and its
 current streak, plus how many reminders you completed and how many are still open.
-Composed the same deterministic way as the push and nudge messages — no extra API
-call, nothing that can read oddly on an unattended message. Fires at most once
-a week, even if the bot restarts partway through Sunday.
+A forward-looking "Coming up this week" section follows when there's anything in
+it — upcoming Canvas assignments (if Canvas is set up) and any Swedish public
+holiday in the next 7 days. Composed the same deterministic way as the push and
+nudge messages — no extra API call beyond Canvas's own, nothing that can read
+oddly on an unattended message. Fires at most once a week, even if the bot
+restarts partway through Sunday.
 
 The same numbers are available on demand too — "how's this week going?" any other
 day gets a live answer built from the same data, phrased by Claude rather than the
@@ -613,8 +617,9 @@ National Day, Christmas), Easter-relative dates (Good Friday through Whit
 Sunday, via the standard Meeus/Jones/Butcher algorithm), and the two dates
 defined as "the Saturday within a date range" (Midsummer Day, All Saints'
 Day). Deliberately excludes non-official eve days like Christmas Eve —
-widely observed, but not on the official list. An on-demand answer only;
-not wired into reminders or the morning brief this round.
+widely observed, but not on the official list. Also feeds the morning
+brief (today's holiday, if any) and the Sunday digest (any holiday in the
+coming week) — see those sections above.
 
 ### Canvas LMS
 
@@ -625,7 +630,9 @@ for Databases," "what's my grade in Algorithms." Needs `CANVAS_BASE_URL`
 Canvas is hosted per-institution, so there's no single default) and
 `CANVAS_API_TOKEN` (a personal access token you generate yourself in
 Canvas's own settings, not OAuth). Leave either unset and the Canvas
-tools just report "not set up yet."
+tools just report "not set up yet." Also feeds the morning brief
+(assignments due today) and the Sunday digest (assignments due in the
+coming week) once configured — see those sections above.
 
 **Worth knowing:** same unverified-in-this-sandbox-against-a-real-account
 caveat as the Sweden integrations — this sandbox's egress proxy blocks

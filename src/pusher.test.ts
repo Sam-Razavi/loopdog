@@ -5,6 +5,16 @@ import type { WeeklyHabitStat } from "./pusher";
 import type { ReminderView, Recurrence } from "./db/reminders";
 import type { HabitSummary } from "./db/habits";
 import type { CalendarEvent } from "./google";
+import type { CanvasAssignment } from "./canvas";
+import type { SwedishHoliday } from "./swedishholidays";
+
+function assignment(overrides: Partial<CanvasAssignment> = {}): CanvasAssignment {
+  return { id: 1, name: "Problem set 3", course: "Algorithms", dueAt: "2026-08-12T23:59:00Z", url: null, ...overrides };
+}
+
+function holiday(overrides: Partial<SwedishHoliday> = {}): SwedishHoliday {
+  return { name: "Midsommardagen (Midsummer Day)", date: "2026-06-20", ...overrides };
+}
 
 function reminder(overrides: Partial<ReminderView> = {}): ReminderView {
   return {
@@ -117,6 +127,19 @@ test("digest shows a habit's own days_logged, not a shared default", () => {
   assert.match(message, /meditation: 0\/7, streak at 0/);
 });
 
+test("digest with upcoming Canvas assignments and holidays adds a 'Coming up this week' section", () => {
+  const message = formatDigest([], 0, 0, [assignment({ name: "Problem set 3" })], [holiday()]);
+  const lines = message.split("\n");
+  assert.equal(lines[3], "Coming up this week:");
+  assert.match(lines[4]!, /Problem set 3 \(Algorithms, due 2026-08-12\)/);
+  assert.match(lines[5]!, /Midsommardagen \(Midsummer Day\) \(2026-06-20\)/);
+});
+
+test("digest with no upcoming assignments or holidays omits the 'Coming up' section entirely", () => {
+  const message = formatDigest([], 0, 0, [], []);
+  assert.ok(!message.includes("Coming up this week"));
+});
+
 test("morning brief with nothing due and nothing at risk is a programming error, not a message", () => {
   assert.throws(() => formatMorningBrief([], []), /nothing to say/);
 });
@@ -188,6 +211,35 @@ test("morning brief shows an all-day event distinctly from a timed one", () => {
 
 test("morning brief with nothing at all — no reminders, habits, or events — is still a programming error", () => {
   assert.throws(() => formatMorningBrief([], [], []), /nothing to say/);
+});
+
+test("morning brief with only a Canvas assignment due today lists it under 'Due on Canvas today'", () => {
+  const message = formatMorningBrief([], [], [], [assignment({ name: "Lab report" })]);
+  const lines = message.split("\n");
+  assert.equal(lines[0], "Due on Canvas today:");
+  assert.match(lines[1]!, /Lab report \(Algorithms\)/);
+});
+
+test("morning brief with only a holiday today leads with it", () => {
+  const message = formatMorningBrief([], [], [], [], "Midsommardagen (Midsummer Day)");
+  assert.equal(message, "Today's a public holiday: Midsommardagen (Midsummer Day).");
+});
+
+test("morning brief with a holiday and other sections puts the holiday line first", () => {
+  const message = formatMorningBrief(
+    [reminder({ text: "stretch" })],
+    [],
+    [],
+    [],
+    "Midsommardagen (Midsummer Day)",
+  );
+  const lines = message.split("\n");
+  assert.equal(lines[0], "Today's a public holiday: Midsommardagen (Midsummer Day).");
+  assert.equal(lines[1], "Due today:");
+});
+
+test("morning brief with nothing at all, including no Canvas assignments or holiday, is still a programming error", () => {
+  assert.throws(() => formatMorningBrief([], [], [], [], null), /nothing to say/);
 });
 test("important-date nudge: zero pending is a programming error, not a message", () => {
   assert.throws(() => formatImportantDateNudge([]), /nothing to say/);
