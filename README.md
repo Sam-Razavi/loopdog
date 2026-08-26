@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with forty-two tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with forty-three tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -83,6 +83,7 @@ everything else.
 | `export_backup` | Send the live database as a Discord file attachment |
 | `set_mute` | Pause every proactive DM until a given time |
 | `clear_mute` | Resume proactive DMs early |
+| `get_transit_departures` | Real-time next departures from a Stockholm (SL) stop |
 | `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
@@ -494,6 +495,20 @@ the library to function.
 
 **Worth knowing:** same as every other provider — code-complete, reasoned
 through carefully, not yet exercised against a real account.
+
+### Stockholm transit (SL)
+
+Real-time next departures from any SL stop — bus, metro, train, tram,
+ferry. "When's the next bus from Odenplan" — no setup, no API key, SL's
+own Transport API is free and open. If a stop name matches more than one
+real stop, it asks which one rather than guessing.
+
+**Worth knowing:** unlike the OAuth providers above, this needed no real
+account to build against — but it also couldn't be exercised against the
+live API from this development environment (network policy in the
+sandbox this was built in blocked the host outright). Parsing is written
+defensively for exactly that reason; the first real conversation against
+a live stop is this integration's actual first test.
 
 ### Web search
 

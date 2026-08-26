@@ -30,6 +30,7 @@ import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
 import { fetchReadableText } from "./webfetch";
 import { searchWeb } from "./websearch";
+import { findDepartures } from "./transit";
 import { getWeather } from "./weather";
 import { ToolError } from "./errors";
 
@@ -278,6 +279,32 @@ export const TOOLS: Anthropic.Tool[] = [
       "Resume proactive DMs immediately. Call when the user says they're back, " +
       "or wants nudges again before a mute would naturally expire.",
     input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "get_transit_departures",
+    description:
+      "Real-time next departures from a Stockholm public transit (SL) " +
+      "stop — bus, metro, train, tram, or ferry. Call this for 'when's the " +
+      "next bus/train from X' or 'is the pendeltåg running' type " +
+      "questions. If the stop name matches more than one real stop, this " +
+      "fails listing the candidates — ask the user which one rather than " +
+      "guessing. For journeys between two places rather than one stop's " +
+      "board, use plan_transit_trip instead, once that's set up.",
+    input_schema: {
+      type: "object",
+      properties: {
+        stop: { type: "string", description: "The stop name, e.g. 'Odenplan' or 'T-Centralen'." },
+        transport: {
+          type: "string",
+          description: "Optional filter, e.g. 'BUS', 'METRO', 'TRAIN', 'TRAM', 'SHIP'. Omit to show all.",
+        },
+        max_results: {
+          type: "integer",
+          description: "How many departures to return. Defaults to 10.",
+        },
+      },
+      required: ["stop"],
+    },
   },
   {
     name: "web_search",
@@ -1041,6 +1068,13 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "clear_mute": {
       return { cleared: clearMute() };
+    }
+
+    case "get_transit_departures": {
+      const maxResults = optionalIntClamped(input, "max_results", 10, 1, 30);
+      const transportFilter = optionalStr(input, "transport");
+      const result = await findDepartures(str(input, "stop"), maxResults, transportFilter);
+      return { untrusted: true, ...result };
     }
 
     case "web_search": {
