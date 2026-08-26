@@ -20,6 +20,7 @@ import { getMetricHistory, listMetrics, logMetric, type MetricMode } from "./db/
 import { addMemory, forgetMemory, listMemories } from "./db/memories";
 import { renderHabitChart } from "./chart";
 import { renderMetricChart } from "./linechart";
+import { findAssociation } from "./correlations";
 import * as googleCalendar from "./google";
 import * as hotmail from "./hotmail";
 import * as privatemail from "./privatemail";
@@ -510,6 +511,34 @@ export const TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ["name"],
+    },
+  },
+  {
+    name: "find_correlation",
+    description:
+      "Compare two tracked things — habits and/or metrics, any combination " +
+      "— and get back the raw numbers behind any pattern between them: how " +
+      "often one habit coincides with another, or how a metric differs on " +
+      "days a habit was logged, or how two metrics move together. Call " +
+      "this when the user asks whether two specific things relate — 'am I " +
+      "more consistent with gym when I sleep more', 'does a big calorie " +
+      "day affect my weight'. If they ask a vague 'find me any patterns' " +
+      "question without naming two things, ask which two rather than " +
+      "guessing and calling this repeatedly.\n\n" +
+      "This returns statistics, not a verdict — see the system prompt's " +
+      "rules on how to phrase results, especially around small sample " +
+      "sizes and never implying causation.",
+    input_schema: {
+      type: "object",
+      properties: {
+        a: { type: "string", description: "The first habit or metric name." },
+        b: { type: "string", description: "The second habit or metric name." },
+        days: {
+          type: "integer",
+          description: "How many recent days to look at. Defaults to 90.",
+        },
+      },
+      required: ["a", "b"],
     },
   },
   {
@@ -1131,6 +1160,11 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const path = join(tmpdir(), `loopdog-metric-chart-${nowUtcIso().replace(/[:.]/g, "-")}.png`);
       await writeFile(path, png);
       return { ok: true, path, name, days };
+    }
+
+    case "find_correlation": {
+      const days = optionalIntClamped(input, "days", 90, 14, 370);
+      return findAssociation(str(input, "a"), str(input, "b"), days);
     }
 
     case "connect_google": {

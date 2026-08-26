@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with forty-one tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with forty-two tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -97,6 +97,7 @@ everything else.
 | `get_metric_history` | A metric's recent day-by-day values and current reading |
 | `list_metrics` | Everything numeric being tracked, with today's value |
 | `metric_chart` | A trend-line image of a metric's recent history, as a Discord attachment |
+| `find_correlation` | Raw stats on how two habits/metrics relate — a rate difference, an average difference, or a correlation coefficient |
 | `connect_google` | Start or check a Google connection — Calendar + Gmail together (optional, see below) |
 | `disconnect_google` | Unlink the Google account |
 | `list_calendar_events` | Upcoming events, once connected |
@@ -277,6 +278,23 @@ cleaning" edits a reminder in place.
 — useful insurance since the database otherwise only exists on whatever host is
 running Loopdog (see [Deploying to Railway](#deploying-to-railway) below for why
 this matters there specifically).
+
+### Habit & metric correlations
+
+"Am I more consistent with gym when I sleep more?" — `find_correlation`
+compares any two tracked things (habits, metrics, or a mix) using whatever
+history already exists; nothing new to log, no separate setup. Depending on
+what's being compared, it returns a rate difference (two habits), a
+difference of averages (a habit against a metric), or a Pearson correlation
+coefficient (two metrics) — plus the sample size behind each number.
+
+Deliberately plain statistics, not a claim about *why* — a personal habit
+tracker comparing a few dozen days isn't a study, and the system prompt is
+explicit that Loopdog reports what the data shows, never that one thing
+caused another. Small samples are called out as such rather than reported
+as if they were solid; a genuinely undefined result (nothing logged on one
+side, or a metric that hasn't varied at all) comes back as "not enough
+data," not a misleading zero.
 
 ### Google: Calendar + Gmail
 
