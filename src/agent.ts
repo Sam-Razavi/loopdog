@@ -28,14 +28,38 @@ export interface ImageInput {
 
 export interface AgentReply {
   text: string;
-  /** Path to a file to attach, when a tool like export_backup/habit_chart ran this turn. */
-  attachment?: string;
+  /**
+   * Paths to files to attach, when tools like export_backup/habit_chart ran
+   * this turn. A list, not a single slot: two chart calls in one turn used to
+   * overwrite each other, so the first file was never sent and leaked in the
+   * temp directory.
+   */
+  attachments: string[];
 }
 
 // Tools whose result includes a "path" the caller should attach to the reply.
 const ATTACHMENT_TOOLS = new Set(["export_backup", "habit_chart", "metric_chart"]);
 
-export async function respond(userText: string, images: ImageInput[] = []): Promise<AgentReply> {
+/**
+ * Serialises every call, because the Discord handler is fully re-entrant:
+ * two messages arriving close together would each read the same
+ * recentTurns() and each appendTurn() at the end, landing history as
+ * user1, user2, assistant2, assistant1 — and the second message would never
+ * see the first's context. Queueing here rather than in index.ts means
+ * repl.ts and any future caller get the same guarantee for free.
+ *
+ * The tail .catch keeps one rejected turn from wedging the chain forever;
+ * the rejection still reaches that call's own awaiter.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+
+export function respond(userText: string, images: ImageInput[] = []): Promise<AgentReply> {
+  const result = queue.then(() => respondInner(userText, images));
+  queue = result.catch(() => undefined);
+  return result;
+}
+
+async function respondInner(userText: string, images: ImageInput[] = []): Promise<AgentReply> {
   const userContent: Anthropic.MessageParam["content"] = images.length
     ? [
         { type: "text", text: userText },
@@ -62,7 +86,7 @@ export async function respond(userText: string, images: ImageInput[] = []): Prom
   // whole tool-use loop rather than shifting between rounds.
   const system = buildSystemPrompt();
   let reply = "";
-  let attachment: string | undefined;
+  const attachments: string[] = [];
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     const response = await client.messages.create({
@@ -79,7 +103,10 @@ export async function respond(userText: string, images: ImageInput[] = []): Prom
     });
 
     if (response.stop_reason === "refusal") {
-      return { text: "That one tripped a safety filter on my end. Try rephrasing?" };
+      return {
+        text: "That one tripped a safety filter on my end. Try rephrasing?",
+        attachments,
+      };
     }
 
     reply = textOf(response);
@@ -105,7 +132,7 @@ export async function respond(userText: string, images: ImageInput[] = []): Prom
           result !== null &&
           "path" in result
         ) {
-          attachment = String((result as { path: unknown }).path);
+          attachments.push(String((result as { path: unknown }).path));
         }
         results.push({
           type: "tool_result",
@@ -142,5 +169,5 @@ export async function respond(userText: string, images: ImageInput[] = []): Prom
     : userText;
   appendTurn("user", persistedText);
   appendTurn("assistant", reply);
-  return { text: reply, attachment };
+  return { text: reply, attachments };
 }

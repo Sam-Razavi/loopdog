@@ -67,6 +67,17 @@ export function getStatus(): "not_connected" | "pending" | "connected" {
   return getAuthRow()?.status ?? "not_connected";
 }
 
+/**
+ * The poll_interval the provider asked us to use, in seconds — null when no
+ * connection is pending. Stored since the device flow was first built but
+ * never read until the scheduler grew a dedicated auth poller.
+ */
+export function pendingPollInterval(): number | null {
+  const row = getAuthRow();
+  if (!row || row.status !== "pending") return null;
+  return row.poll_interval ?? null;
+}
+
 export function disconnect(): boolean {
   const row = getAuthRow();
   if (!row) return false;

@@ -13,14 +13,29 @@ export interface StoredTurn {
  * assistant reply carries the substance anyway, so "complete the second one"
  * still resolves after a restart.
  */
+/**
+ * How many turns to keep on disk. Only the most recent ~20 are ever read
+ * back into a prompt; the rest of this is headroom so a restart or a manual
+ * poke at the database still has recent context to look at. Without a cap
+ * the table grew forever and rode along inside every export_backup.
+ */
+const RETAINED_TURNS = 500;
+
 export function appendTurn(role: StoredTurn["role"], content: string): void {
   const trimmed = content.trim();
   if (!trimmed) return;
-  getDb().prepare(`INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)`).run(
+  const db = getDb();
+  db.prepare(`INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)`).run(
     role,
     trimmed,
     nowUtcIso(),
   );
+  // Cheap at this size, and keeps the table from being unbounded. Runs on
+  // every append rather than on a timer so there's no growth window at all.
+  db.prepare(
+    `DELETE FROM messages
+     WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT ?)`,
+  ).run(RETAINED_TURNS);
 }
 
 export function recentTurns(limit = 20): StoredTurn[] {

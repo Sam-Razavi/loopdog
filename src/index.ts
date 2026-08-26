@@ -12,6 +12,7 @@ import { respond, type ImageInput } from "./agent";
 import { migrate } from "./db";
 import { sniffImageType } from "./imagetype";
 import { startScheduler } from "./pusher";
+import { sweepOldTempFiles } from "./tmpfiles";
 
 const DISCORD_LIMIT = 2000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -141,6 +142,8 @@ async function main(): Promise<void> {
         `page watches every ${config.watchIntervalMinutes} minute(s).`,
     );
     startScheduler(client);
+    // Clears anything a previous run left behind before it died.
+    void sweepOldTempFiles();
   });
 
   client.on(Events.MessageCreate, async (message) => {
@@ -157,26 +160,29 @@ async function main(): Promise<void> {
     const images = await extractImages(message);
     if (!prompt && images.length === 0) return;
 
+    let attachments: string[] = [];
     try {
       if (message.channel.isSendable()) await message.channel.sendTyping();
-      const { text, attachment } = await respond(prompt || "(no caption)", images);
-      const parts = chunk(text);
+      const reply = await respond(prompt || "(no caption)", images);
+      attachments = reply.attachments;
+      const parts = chunk(reply.text);
       for (let i = 0; i < parts.length; i++) {
         const part = parts[i]!;
         const isLast = i === parts.length - 1;
         await message.reply(
-          isLast && attachment ? { content: part, files: [attachment] } : part,
+          isLast && attachments.length ? { content: part, files: attachments } : part,
         );
-      }
-      if (attachment) {
-        // Fire-and-forget: avoid accumulating backup files in temp storage.
-        unlink(attachment).catch(() => undefined);
       }
     } catch (error) {
       console.error("[loopdog]", error);
       await message
         .reply("Something broke on my end. Check the logs.")
         .catch(() => undefined);
+    } finally {
+      // Always, not just on the happy path: a failed send used to leave the
+      // file behind forever. sweepOldTempFiles() covers the rest — anything
+      // written by a turn that threw before we ever learned its path.
+      for (const path of attachments) unlink(path).catch(() => undefined);
     }
   });
 

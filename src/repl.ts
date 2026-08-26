@@ -42,9 +42,9 @@ async function main(): Promise<void> {
       if (["exit", "quit"].includes(line.toLowerCase())) break;
 
       try {
-        const { text, attachment } = await respond(line);
+        const { text, attachments } = await respond(line);
         console.log(`loop> ${text}`);
-        if (attachment) console.log(`      (backup written to ${attachment})`);
+        for (const path of attachments) console.log(`      (file written to ${path})`);
         console.log("");
       } catch (error) {
         console.error("error:", error instanceof Error ? error.message : error);

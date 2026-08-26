@@ -784,6 +784,32 @@ function optionalInt(
   return value;
 }
 
+/** Exported for tests. Bounds an already-validated integer into [min, max]. */
+export function clampInt(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Like optionalInt, but bounded. Every numeric tool input goes through this:
+ * `days: 50000` on habit_chart used to allocate ~78MB of pixels and emit a
+ * 142,864px-wide PNG that Discord can't render, and larger values OOM the
+ * container outright. rollDice() in random.ts already bounded its inputs;
+ * this applies the same house rule everywhere else.
+ *
+ * Clamps silently rather than throwing — an unreasonable number isn't an
+ * invalid one, and erroring just costs a retry round. Callers echo the
+ * effective value back in their result so nothing is silently misreported.
+ */
+function optionalIntClamped(
+  input: Record<string, unknown>,
+  key: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  return clampInt(optionalInt(input, key, fallback), min, max);
+}
+
 function optionalRecurrence(
   input: Record<string, unknown>,
   key: string,
@@ -870,11 +896,13 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
         throw new ToolError(`"status" must be pending, completed or all`);
       }
       const dueBefore = optionalStr(input, "due_before");
+      const limit = optionalIntClamped(input, "limit", 20, 1, 100);
       return {
+        limit,
         reminders: listReminders({
           status: status as ReminderStatus,
           dueBefore: dueBefore ? toUtcIso(dueBefore) : undefined,
-          limit: optionalInt(input, "limit", 20),
+          limit,
         }),
       };
     }
@@ -903,7 +931,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "get_habit_streak": {
       const name = str(input, "name");
-      const detail = getHabitDetail(name, optionalInt(input, "history_days", 14));
+      const detail = getHabitDetail(name, optionalIntClamped(input, "history_days", 14, 1, 370));
       if (!detail) {
         const known = listHabits().map((h) => h.name);
         throw new ToolError(
@@ -1026,7 +1054,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "habit_chart": {
       const name = str(input, "name");
-      const days = optionalInt(input, "days", 84);
+      const days = optionalIntClamped(input, "days", 84, 1, 370);
       const png = renderHabitChart(name, days);
       const path = join(tmpdir(), `loopdog-chart-${nowUtcIso().replace(/[:.]/g, "-")}.png`);
       await writeFile(path, png);
@@ -1051,7 +1079,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "get_metric_history": {
       const name = str(input, "name");
-      const history = getMetricHistory(name, optionalInt(input, "history_days", 30));
+      const history = getMetricHistory(name, optionalIntClamped(input, "history_days", 30, 1, 370));
       if (!history) {
         const known = listMetrics().map((m) => m.name);
         throw new ToolError(
@@ -1069,7 +1097,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "metric_chart": {
       const name = str(input, "name");
-      const days = optionalInt(input, "days", 30);
+      const days = optionalIntClamped(input, "days", 30, 1, 370);
       const png = renderMetricChart(name, days);
       const path = join(tmpdir(), `loopdog-metric-chart-${nowUtcIso().replace(/[:.]/g, "-")}.png`);
       await writeFile(path, png);
@@ -1085,8 +1113,8 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
     }
 
     case "list_calendar_events": {
-      const days = optionalInt(input, "days", 7);
-      return { events: await googleCalendar.listEvents(days) };
+      const days = optionalIntClamped(input, "days", 7, 1, 90);
+      return { days, events: await googleCalendar.listEvents(days) };
     }
 
     case "create_calendar_event": {
@@ -1107,7 +1135,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "list_emails": {
       const provider = resolveEmailProvider(input);
-      const maxResults = optionalInt(input, "max_results", 10);
+      const maxResults = optionalIntClamped(input, "max_results", 10, 1, 25);
       const query = optionalStr(input, "query");
       const emails =
         provider === "gmail"
@@ -1115,7 +1143,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
           : provider === "hotmail"
             ? await hotmail.listEmails(query, maxResults)
             : await privatemail.listEmails(query, maxResults);
-      return { provider, emails };
+      return { provider, max_results: maxResults, emails };
     }
 
     case "get_email": {
@@ -1145,15 +1173,18 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
     }
 
     case "list_telegram_chats": {
-      const maxResults = optionalInt(input, "max_results", 15);
-      return { chats: await telegram.listChats(maxResults) };
+      const maxResults = optionalIntClamped(input, "max_results", 15, 1, 100);
+      return { max_results: maxResults, chats: await telegram.listChats(maxResults) };
     }
 
     case "get_telegram_messages": {
       const chatId = str(input, "chat_id");
       const query = optionalStr(input, "query");
-      const maxResults = optionalInt(input, "max_results", 15);
-      return { messages: await telegram.getMessages(chatId, query, maxResults) };
+      const maxResults = optionalIntClamped(input, "max_results", 15, 1, 100);
+      return {
+        max_results: maxResults,
+        messages: await telegram.getMessages(chatId, query, maxResults),
+      };
     }
 
     case "remember": {

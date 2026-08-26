@@ -19,6 +19,7 @@ import { fetchReadableText } from "./webfetch";
 import * as googleCalendar from "./google";
 import * as hotmail from "./hotmail";
 import { addDays, dayOfWeek, formatLocal, inQuietHours, localDay, localHour, localInstant } from "./time";
+import { sweepOldTempFilesIfDue } from "./tmpfiles";
 
 /**
  * Composed server-side, deliberately, not through Claude — same reasoning as
@@ -360,9 +361,44 @@ async function checkPendingHotmailAuth(client: Client): Promise<void> {
   }
 }
 
+/**
+ * How often the auth poller wakes. Far tighter than the main push interval
+ * because a device code expires in minutes and the user is standing there
+ * waiting — riding the 5-minute tick meant "connected" could take five
+ * minutes to land. When nothing is pending this is one indexed SQLite read
+ * per provider and no network traffic at all.
+ */
+const AUTH_POLL_INTERVAL_MS = 15_000;
+
+/** Floor for how often we'll actually hit a provider's token endpoint. */
+const MIN_PROVIDER_POLL_SECONDS = 5;
+
+const lastAuthPollAt = new Map<string, number>();
+
+/**
+ * Honours the poll_interval each provider hands back with its device code —
+ * previously stored and never read, so we polled on whatever cadence the
+ * scheduler happened to run at instead of the one we were asked for.
+ */
+function providerPollDue(provider: string, intervalSeconds: number | null): boolean {
+  const spacing = Math.max(intervalSeconds ?? MIN_PROVIDER_POLL_SECONDS, MIN_PROVIDER_POLL_SECONDS) * 1000;
+  const last = lastAuthPollAt.get(provider) ?? 0;
+  if (Date.now() - last < spacing) return false;
+  lastAuthPollAt.set(provider, Date.now());
+  return true;
+}
+
+async function authTick(client: Client): Promise<void> {
+  if (providerPollDue("google", googleCalendar.pendingPollInterval())) {
+    await checkPendingGoogleAuth(client);
+  }
+  if (providerPollDue("hotmail", hotmail.pendingPollInterval())) {
+    await checkPendingHotmailAuth(client);
+  }
+}
+
 async function tick(client: Client): Promise<void> {
-  await checkPendingGoogleAuth(client);
-  await checkPendingHotmailAuth(client);
+  void sweepOldTempFilesIfDue();
   if (getMuteUntil()) return; // vacation mode: skip every proactive DM this tick
   await checkAndPush(client);
   await checkAtRiskNudge(client);
@@ -377,9 +413,10 @@ async function tick(client: Client): Promise<void> {
  * during quiet hours), the once-daily at-risk habit nudge, the once-a-week
  * Sunday digest, the once-daily morning brief, and watched-page change
  * alerts (each on its own, slower LOOPDOG_WATCH_INTERVAL_MINUTES cadence)
- * — all of it suppressed entirely while a vacation mute is active, except
- * finishing a Google or Hotmail connection the user explicitly started,
- * which isn't an unprompted nudge and always goes through. Runs once
+ * — all of it suppressed entirely while a vacation mute is active. Finishing
+ * a Google or Hotmail connection the user explicitly started isn't an
+ * unprompted nudge, so it runs on its own faster timer (see authTick) that
+ * the mute gate never touches. Runs once
  * immediately (so a restart doesn't wait a full interval to catch anything
  * that fell due while the bot was down), then on a timer at
  * LOOPDOG_PUSH_INTERVAL_MINUTES — fine-grained enough to also catch "has
@@ -389,4 +426,8 @@ export function startScheduler(client: Client): void {
   const intervalMs = config.pushIntervalMinutes * 60_000;
   void tick(client);
   setInterval(() => void tick(client), intervalMs);
+
+  // Its own, much faster timer — see AUTH_POLL_INTERVAL_MS above.
+  void authTick(client);
+  setInterval(() => void authTick(client), AUTH_POLL_INTERVAL_MS);
 }
