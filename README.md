@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with sixty-five tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with sixty-six tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -119,6 +119,7 @@ everything else.
 | `list_emails` | List or search email, from whichever of Gmail/Hotmail/PrivateMail is usable |
 | `get_email` | Full content of one email, including body text |
 | `create_email_draft` | Create a draft — never sends, no send tool exists for any provider |
+| `check_all_inboxes` | Check every connected inbox (all 3 email accounts + Telegram) at once |
 | `list_telegram_chats` | Recent Telegram chats with unread counts and a last-message preview |
 | `get_telegram_messages` | Recent messages from one Telegram chat, or a search within it |
 | `remember` | Store a standing fact — a preference, an allergy, a detail worth keeping |
@@ -535,6 +536,18 @@ the library to function.
 
 **Worth knowing:** same as every other provider — code-complete, reasoned
 through carefully, not yet exercised against a real account.
+
+### Checking every inbox at once
+
+With Gmail, Hotmail, and PrivateMail all connectable independently,
+`list_emails` normally has to be told which one to use whenever more than
+one is usable at a time — it errors rather than guessing. `check_all_inboxes`
+sidesteps that: "catch me up" or "anything I need to see" checks every
+connected email account plus Telegram in parallel and returns them
+together. Sources that aren't set up are silently skipped, not reported
+as errors; it only fails if literally nothing is usable. One source
+failing (an expired token, a network hiccup) doesn't take the others down
+with it — that source's entry just carries its own error instead.
 
 ### Stockholm transit (SL)
 

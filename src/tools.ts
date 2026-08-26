@@ -836,6 +836,27 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "check_all_inboxes",
+    description:
+      "Check every connected inbox at once — Gmail, Hotmail/Outlook, " +
+      "PrivateMail, and Telegram — instead of picking one. Call this for " +
+      "'anything I need to see across my inboxes' or 'catch me up' rather " +
+      "than calling list_emails once per provider (which also requires " +
+      "naming a provider explicitly whenever more than one is usable). " +
+      "Sources that aren't set up are silently skipped, not reported as " +
+      "errors; fails only if nothing at all is usable.",
+    input_schema: {
+      type: "object",
+      properties: {
+        max_per_source: {
+          type: "integer",
+          description: "How many recent messages/chats to show per source. Defaults to 5.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: "list_telegram_chats",
     description:
       "List recent Telegram chats (DMs, groups, channels) with unread " +
@@ -1636,6 +1657,39 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
             ? await hotmail.createDraft(to, subject, body)
             : await privatemail.createDraft(to, subject, body);
       return { provider, ...draft };
+    }
+
+    case "check_all_inboxes": {
+      const maxPerSource = optionalIntClamped(input, "max_per_source", 5, 1, 15);
+
+      const sources: { name: string; usable: boolean; fetch: () => Promise<unknown> }[] = [
+        { name: "gmail", usable: googleCalendar.isConnected(), fetch: () => googleCalendar.listEmails(undefined, maxPerSource) },
+        { name: "hotmail", usable: hotmail.isConnected(), fetch: () => hotmail.listEmails(undefined, maxPerSource) },
+        { name: "privatemail", usable: privatemail.isConfigured(), fetch: () => privatemail.listEmails(undefined, maxPerSource) },
+        { name: "telegram", usable: telegram.isConfigured(), fetch: () => telegram.listChats(maxPerSource) },
+      ];
+
+      const usableSources = sources.filter((s) => s.usable);
+      if (usableSources.length === 0) {
+        throw new ToolError(
+          "no inbox is usable yet — call connect_google, call connect_hotmail, set up PrivateMail's env vars, or set up Telegram, or ask the user which they want.",
+        );
+      }
+
+      // Each source's failure is contained to its own entry rather than
+      // sinking the whole call — same spirit as checkPageWatches' per-watch
+      // try/catch — so one dead connection doesn't hide the others.
+      const results = await Promise.all(
+        usableSources.map(async (s): Promise<[string, unknown]> => {
+          try {
+            return [s.name, await s.fetch()];
+          } catch (error) {
+            return [s.name, { error: error instanceof Error ? error.message : String(error) }];
+          }
+        }),
+      );
+
+      return { untrusted: true, max_per_source: maxPerSource, ...Object.fromEntries(results) };
     }
 
     case "list_telegram_chats": {
