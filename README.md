@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with thirty-eight tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with forty tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -105,6 +105,8 @@ everything else.
 | `list_emails` | List or search email, from whichever of Gmail/Hotmail/PrivateMail is usable |
 | `get_email` | Full content of one email, including body text |
 | `create_email_draft` | Create a draft — never sends, no send tool exists for any provider |
+| `list_telegram_chats` | Recent Telegram chats with unread counts and a last-message preview |
+| `get_telegram_messages` | Recent messages from one Telegram chat, or a search within it |
 | `remember` | Store a standing fact — a preference, an allergy, a detail worth keeping |
 | `list_memories` | Everything currently remembered |
 | `forget` | Delete a stored memory |
@@ -424,6 +426,56 @@ that needs it.
 **Worth knowing:** same as Google/Hotmail above — code-complete, reasoned
 through carefully, not yet exercised against a real mailbox.
 
+### Telegram
+
+Read only — recent chats and messages from your own Telegram account, not
+a bot's separate inbox. There is no reply/send tool for this one, same as
+the email providers, but the reasoning behind that boundary is worth
+reading before setting it up (below).
+
+**Setup looks nothing like the other providers**, deliberately: Telegram
+has no device-flow equivalent for logging into a personal account. The
+login is interactive — a phone number, a code that arrives on that phone
+in real time, and a 2FA password if one's set — and has to happen once, at
+a terminal, the same way any Telegram app's first login works. So this is
+a one-time local script, not a Discord tool:
+
+1. Register an app at [my.telegram.org/apps](https://my.telegram.org/apps)
+   (a one-time developer registration, not a per-login step) — copy the
+   **api_id** and **api_hash**.
+2. Set `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` in `.env`, then run `npm
+   run telegram-login` and follow the prompts (phone number, the code that
+   arrives on Telegram/SMS, and a 2FA password if you have one set).
+3. It prints a session string at the end — set that as `TELEGRAM_SESSION`
+   (`.env` locally, or Railway's Variables tab for the deployed bot).
+
+All three optional at boot — leave any unset and Telegram tools just
+report "not set up yet."
+
+**Worth knowing, plainly, not buried:** `TELEGRAM_SESSION` is not a scoped
+credential the way everything else in this README is. Gmail/Hotmail's
+OAuth tokens can't be granted send access without asking for the scope by
+name; PrivateMail's password is limited by IMAP itself having no send
+operation. A Telegram user session has neither kind of backstop — it's
+full, unscoped account access, capable of sending messages, deleting
+chats, anything the real app can do. The "read only, no send tool" promise
+here rests entirely on this codebase simply never calling a send-capable
+method — real, same as every other provider's guarantee, but resting on
+one fewer layer of protection than the rest. Treat the session string like
+the account password itself, because functionally, it is one.
+
+Built on [`teleproto`](https://www.npmjs.com/package/teleproto), an
+actively maintained fork of the archived `telegram`/GramJS package — that
+swap happened mid-build, after installing the original package surfaced
+its own deprecation notice pointing here. Verified before use, same as
+`imapflow`: mostly pure JS: the only native pieces (`bufferutil`,
+`utf-8-validate`) are optional performance accelerators for the WebSocket
+transport with prebuilt binaries for Linux/macOS/Windows, not required for
+the library to function.
+
+**Worth knowing:** same as every other provider — code-complete, reasoned
+through carefully, not yet exercised against a real account.
+
 ### Persistent memory
 
 Ordinary conversation only reaches back about 20 messages — plenty for a chat,
@@ -579,6 +631,9 @@ transcript up top happened — no Discord app was open for any of it.
 | `HOTMAIL_CLIENT_ID` | — | Optional. Enables Hotmail/Outlook email — see its section above. No paired secret needed |
 | `PRIVATEMAIL_EMAIL` | — | Optional. Enables PrivateMail (Namecheap, IMAP) — see its section above |
 | `PRIVATEMAIL_PASSWORD` | — | Optional, paired with `PRIVATEMAIL_EMAIL`. The actual mailbox password — no OAuth for this provider |
+| `TELEGRAM_API_ID` | — | Optional. Enables Telegram (read only) — see its section above |
+| `TELEGRAM_API_HASH` | — | Optional, paired with `TELEGRAM_API_ID` |
+| `TELEGRAM_SESSION` | — | Optional. From `npm run telegram-login` — full account access, not a scoped token |
 
 Missing variables are reported all at once at boot, by name.
 
@@ -587,6 +642,7 @@ Missing variables are reported all at once at boot, by name.
 ```bash
 npm run dev        # watch mode, full Discord bot
 npm run chat       # terminal REPL, no Discord needed — see above
+npm run telegram-login  # one-time interactive Telegram login — see its section above
 npm run typecheck  # tsc --noEmit
 npm test           # streak rules + every other pure function
 npm run build      # -> dist/
@@ -614,6 +670,8 @@ src/
 ├── hotmail.ts    Microsoft OAuth device flow + Graph mail API (read/draft only)
 ├── privatemail.ts  Namecheap Private Email over IMAP, via imapflow (read/draft only)
 ├── email.ts      tiny shared RFC822-message builder (google.ts + privatemail.ts)
+├── telegram.ts   personal-account Telegram reads, via teleproto (read only)
+├── telegram-login.ts  one-time interactive Telegram login (`npm run telegram-login`)
 └── db/           SQLite: reminders, habits, metrics, memories, watches, conversation history
 ```
 

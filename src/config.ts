@@ -30,6 +30,10 @@ export interface Config {
   /** Optional — PrivateMail (Namecheap, IMAP) stays unavailable until both are set. No OAuth for this provider: this is the actual mailbox password. */
   privatemailEmail: string;
   privatemailPassword: string;
+  /** Optional — Telegram stays unavailable until all three are set. No connect tool: TELEGRAM_SESSION comes from the one-time `npm run telegram-login` script, not a Discord flow. */
+  telegramApiId: string;
+  telegramApiHash: string;
+  telegramSession: string;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -178,6 +182,9 @@ export const config: Config = {
   hotmailClientId: optional("HOTMAIL_CLIENT_ID", ""),
   privatemailEmail: optional("PRIVATEMAIL_EMAIL", ""),
   privatemailPassword: optional("PRIVATEMAIL_PASSWORD", ""),
+  telegramApiId: optional("TELEGRAM_API_ID", ""),
+  telegramApiHash: optional("TELEGRAM_API_HASH", ""),
+  telegramSession: optional("TELEGRAM_SESSION", ""),
 };
 
 function report(problems: string[], hint: string): void {

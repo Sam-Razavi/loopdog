@@ -23,6 +23,7 @@ import { renderMetricChart } from "./linechart";
 import * as googleCalendar from "./google";
 import * as hotmail from "./hotmail";
 import * as privatemail from "./privatemail";
+import * as telegram from "./telegram";
 import { gatherWeekSummary } from "./pusher";
 import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
@@ -650,6 +651,49 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "list_telegram_chats",
+    description:
+      "List recent Telegram chats (DMs, groups, channels) with unread " +
+      "counts and a last-message preview. Call this for broad questions " +
+      "about what's going on in Telegram, or to find a chat's id before " +
+      "calling get_telegram_messages. Fails with a plain error if not set " +
+      "up yet — Telegram has no in-conversation connect step (it needs a " +
+      "one-time login run locally, see the README), so just say that " +
+      "plainly rather than offering to connect it yourself.",
+    input_schema: {
+      type: "object",
+      properties: {
+        max_results: {
+          type: "integer",
+          description: "How many chats to return. Defaults to 15.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_telegram_messages",
+    description:
+      "Get recent messages from one Telegram chat, or search within it. " +
+      "Call this when the user asks what someone said, or wants to check a " +
+      "specific chat. Read only — there is no reply/send tool, deliberately.",
+    input_schema: {
+      type: "object",
+      properties: {
+        chat_id: { type: "string", description: "The chat's id, from list_telegram_chats." },
+        query: {
+          type: "string",
+          description: "Optional text to search for within this chat. Omit for the most recent messages.",
+        },
+        max_results: {
+          type: "integer",
+          description: "How many messages to return. Defaults to 15.",
+        },
+      },
+      required: ["chat_id"],
+    },
+  },
+  {
     name: "remember",
     description:
       "Store a fact permanently — a preference, an allergy, an important date, " +
@@ -1091,6 +1135,18 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
             ? await hotmail.createDraft(to, subject, body)
             : await privatemail.createDraft(to, subject, body);
       return { provider, ...draft };
+    }
+
+    case "list_telegram_chats": {
+      const maxResults = optionalInt(input, "max_results", 15);
+      return { chats: await telegram.listChats(maxResults) };
+    }
+
+    case "get_telegram_messages": {
+      const chatId = str(input, "chat_id");
+      const query = optionalStr(input, "query");
+      const maxResults = optionalInt(input, "max_results", 15);
+      return { messages: await telegram.getMessages(chatId, query, maxResults) };
     }
 
     case "remember": {

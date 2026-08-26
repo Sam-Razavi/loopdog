@@ -6,6 +6,7 @@ import { listOverdue } from "./db/reminders";
 import { getStatus as getCalendarStatus } from "./google";
 import { getStatus as getHotmailStatus } from "./hotmail";
 import { getStatus as getPrivatemailStatus } from "./privatemail";
+import { getStatus as getTelegramStatus } from "./telegram";
 import { currentOffset, formatLocal, localDay } from "./time";
 
 // Voice compass: the friend who never makes it weird. Understated, doesn't
@@ -157,6 +158,14 @@ function liveState(): string {
     lines.push(
       ``,
       `PrivateMail (a custom-domain mailbox) is set up — no connect step needed for this one, it's ready whenever env vars are present. Its email tools work the same way as Gmail/Hotmail's. No send tool exists for this either.`,
+    );
+  }
+
+  const telegramStatus = getTelegramStatus();
+  if (telegramStatus === "configured") {
+    lines.push(
+      ``,
+      `Telegram is set up (read only) — list_telegram_chats/get_telegram_messages work directly. No connect step exists for this one and none is offered; if asked to connect/reconnect it, say it needs the one-time local login script re-run, not something doable from here. No reply/send tool exists either.`,
     );
   }
 
