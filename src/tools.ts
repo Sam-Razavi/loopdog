@@ -991,7 +991,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
     }
 
     case "fetch_url": {
-      return await fetchReadableText(str(input, "url"));
+      return { untrusted: true, ...(await fetchReadableText(str(input, "url"))) };
     }
 
     case "watch_page": {
@@ -1143,7 +1143,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
           : provider === "hotmail"
             ? await hotmail.listEmails(query, maxResults)
             : await privatemail.listEmails(query, maxResults);
-      return { provider, max_results: maxResults, emails };
+      return { untrusted: true, provider, max_results: maxResults, emails };
     }
 
     case "get_email": {
@@ -1155,7 +1155,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
           : provider === "hotmail"
             ? await hotmail.getEmail(id)
             : await privatemail.getEmail(id);
-      return { provider, ...email };
+      return { untrusted: true, provider, ...email };
     }
 
     case "create_email_draft": {
@@ -1174,7 +1174,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "list_telegram_chats": {
       const maxResults = optionalIntClamped(input, "max_results", 15, 1, 100);
-      return { max_results: maxResults, chats: await telegram.listChats(maxResults) };
+      return { untrusted: true, max_results: maxResults, chats: await telegram.listChats(maxResults) };
     }
 
     case "get_telegram_messages": {
@@ -1182,6 +1182,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const query = optionalStr(input, "query");
       const maxResults = optionalIntClamped(input, "max_results", 15, 1, 100);
       return {
+        untrusted: true,
         max_results: maxResults,
         messages: await telegram.getMessages(chatId, query, maxResults),
       };

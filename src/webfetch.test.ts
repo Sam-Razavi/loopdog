@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extractReadableText } from "./webfetch";
+import { extractReadableText, fetchReadableText } from "./webfetch";
 
 test("extracts the title from a <title> tag", () => {
   const { title } = extractReadableText("<html><head><title>Hello World</title></head></html>");
@@ -54,4 +54,31 @@ test("does not truncate text under the cap", () => {
   const { text, truncated } = extractReadableText("<p>short</p>");
   assert.equal(truncated, false);
   assert.equal(text, "short");
+});
+
+test("refuses loopback addresses", async () => {
+  await assert.rejects(() => fetchReadableText("http://127.0.0.1/"), /private address/);
+  await assert.rejects(() => fetchReadableText("http://[::1]/"), /private address/);
+});
+
+test("refuses the cloud metadata endpoint", async () => {
+  await assert.rejects(() => fetchReadableText("http://169.254.169.254/latest/meta-data/"), /private address/);
+});
+
+test("refuses private ranges and IPv4-mapped loopback", async () => {
+  await assert.rejects(() => fetchReadableText("http://10.0.0.1/"), /private address/);
+  await assert.rejects(() => fetchReadableText("http://192.168.1.1/"), /private address/);
+  await assert.rejects(() => fetchReadableText("http://172.16.0.1/"), /private address/);
+  await assert.rejects(() => fetchReadableText("http://[::ffff:127.0.0.1]/"), /private address/);
+});
+
+test("refuses a hostname that resolves to loopback", async () => {
+  // "localhost" is the everyday shape of this, and it has to be caught by
+  // resolution rather than by the literal-IP check above.
+  await assert.rejects(() => fetchReadableText("http://localhost:8080/"), /private address/);
+});
+
+test("still refuses non-http schemes", async () => {
+  await assert.rejects(() => fetchReadableText("file:///etc/passwd"), /must start with http/);
+  await assert.rejects(() => fetchReadableText("ftp://example.com/"), /must start with http/);
 });
