@@ -41,6 +41,7 @@ import { getWeather } from "./weather";
 import { listSwedishHolidays } from "./swedishholidays";
 import { getAnnouncements, getAssignments, getCourses, getGrades } from "./canvas";
 import { getWeekOverview } from "./overview";
+import { getMonthlySpending } from "./spending";
 import { ToolError } from "./errors";
 
 export { ToolError };
@@ -1151,6 +1152,23 @@ export const TOOLS: Anthropic.Tool[] = [
       required: [],
     },
   },
+  {
+    name: "get_monthly_spending",
+    description:
+      "Total up a 'sum'-mode spending metric (e.g. one logged from receipt " +
+      "photos) by calendar month, so it can be compared month over month. " +
+      "Call for 'how much did I spend this month' or 'am I spending more " +
+      "on groceries lately'. If unsure which metric name the user's been " +
+      "logging spending under, check list_metrics first rather than guessing.",
+    input_schema: {
+      type: "object",
+      properties: {
+        metric_name: { type: "string", description: "The metric's name, e.g. 'expenses' or 'groceries'." },
+        months: { type: "integer", description: "How many months back to total. Defaults to 3." },
+      },
+      required: ["metric_name"],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -1736,6 +1754,11 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const days = optionalIntClamped(input, "days", 7, 1, 90);
       const overview = await getWeekOverview(days);
       return { untrusted: overview.canvas_assignments !== null, days, ...overview };
+    }
+
+    case "get_monthly_spending": {
+      const months = optionalIntClamped(input, "months", 3, 1, 24);
+      return getMonthlySpending(str(input, "metric_name"), months);
     }
 
     default:

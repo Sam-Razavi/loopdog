@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with sixty-four tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with sixty-five tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -94,6 +94,7 @@ everything else.
 | `list_canvas_announcements` | Recent Canvas course announcements, newest first |
 | `list_canvas_grades` | Current grades across all active Canvas courses |
 | `get_week_overview` | Reminders, important dates, holidays, and Canvas assignments in one view |
+| `get_monthly_spending` | A spending metric totaled by calendar month, for comparing month over month |
 | `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
@@ -257,6 +258,14 @@ whatever fits how the conversation actually goes, not a fixed structure.
 
 "Show me my weight trend" gets a real trend-line PNG (`src/linechart.ts`, same
 `png.ts` encoder as habit charts), same no-text-baked-in philosophy.
+
+"How much did I spend this month" — `get_monthly_spending` totals up a
+`sum`-mode metric by calendar month, for comparing month over month
+rather than just seeing a running total. Reuses `log_metric`'s existing
+history entirely, no new schema; a metric name is required rather than
+guessed at, since spending might live under "expenses," "groceries," or
+split across several names — Claude checks `list_metrics` first if it's
+not sure which one to use.
 
 ### Image-aware replies
 
