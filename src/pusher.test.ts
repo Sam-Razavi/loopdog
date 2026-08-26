@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatAtRiskNudge, formatDigest, formatMorningBrief, formatPushMessage } from "./pusher";
+import { formatAtRiskNudge, formatDigest, formatImportantDateNudge, formatMorningBrief, formatPushMessage } from "./pusher";
 import type { WeeklyHabitStat } from "./pusher";
 import type { ReminderView, Recurrence } from "./db/reminders";
 import type { HabitSummary } from "./db/habits";
@@ -188,4 +188,32 @@ test("morning brief shows an all-day event distinctly from a timed one", () => {
 
 test("morning brief with nothing at all — no reminders, habits, or events — is still a programming error", () => {
   assert.throws(() => formatMorningBrief([], [], []), /nothing to say/);
+});
+test("important-date nudge: zero pending is a programming error, not a message", () => {
+  assert.throws(() => formatImportantDateNudge([]), /nothing to say/);
+});
+
+test("important-date nudge: a single 'today' date is one plain sentence", () => {
+  const message = formatImportantDateNudge([
+    { date: { name: "Mom's birthday", note: null }, kind: "today" },
+  ]);
+  assert.equal(message, "Today: Mom's birthday.");
+});
+
+test("important-date nudge: a single advance date includes the note", () => {
+  const message = formatImportantDateNudge([
+    { date: { name: "Anniversary", note: "book the restaurant" }, kind: "advance" },
+  ]);
+  assert.equal(message, "In 7 days: Anniversary — book the restaurant.");
+});
+
+test("important-date nudge: multiple pending dates batch into one message, one line each", () => {
+  const message = formatImportantDateNudge([
+    { date: { name: "Mom's birthday", note: null }, kind: "today" },
+    { date: { name: "Dad's birthday", note: null }, kind: "advance" },
+  ]);
+  const lines = message.split("\n");
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], "Today: Mom's birthday.");
+  assert.equal(lines[1], "In 7 days: Dad's birthday.");
 });

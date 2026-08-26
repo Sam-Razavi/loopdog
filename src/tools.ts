@@ -19,6 +19,7 @@ import { createWatch, deleteWatch, listWatches } from "./db/watches";
 import { getMetricHistory, listMetrics, logMetric, type MetricMode } from "./db/metrics";
 import { addMemory, forgetMemory, listMemories } from "./db/memories";
 import { addItems, clearChecked, listItems, removeItem, setChecked } from "./db/shopping";
+import { addDate, listDates, removeDate } from "./db/importantdates";
 import { renderHabitChart } from "./chart";
 import { renderMetricChart } from "./linechart";
 import { findAssociation } from "./correlations";
@@ -957,6 +958,45 @@ export const TOOLS: Anthropic.Tool[] = [
       "to clear the list, not routinely.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
+  {
+    name: "add_important_date",
+    description:
+      "Remember a birthday, anniversary, or other yearly date. Call this " +
+      "for 'remember my mom's birthday is March 3rd' or similar — distinct " +
+      "from the remember tool, which just recalls a fact: this one also " +
+      "proactively nudges 7 days ahead and again on the day itself. Not " +
+      "for one-off events with a specific year — use create_reminder for " +
+      "those.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "What the date is, as the user would recognise it — e.g. Mom's birthday." },
+        month: { type: "integer", description: "1-12." },
+        day: { type: "integer", description: "1-31, valid for that month." },
+        note: { type: "string", description: "Optional extra detail." },
+      },
+      required: ["name", "month", "day"],
+    },
+  },
+  {
+    name: "list_important_dates",
+    description:
+      "List every remembered yearly date, soonest first, with days until " +
+      "each next occurrence. Call this for 'what important dates are " +
+      "coming up' or before removing one described by name.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "remove_important_date",
+    description: "Stop tracking a yearly date. Call when the user asks to remove or forget one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "The date's id, from list_important_dates." },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -1473,6 +1513,22 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "clear_checked_shopping_items": {
       return { cleared: clearChecked() };
+    }
+
+    case "add_important_date": {
+      const month = int(input, "month");
+      const day = int(input, "day");
+      if (month < 1 || month > 12) throw new ToolError(`"month" must be 1-12, got ${month}`);
+      if (day < 1 || day > 31) throw new ToolError(`"day" must be 1-31, got ${day}`);
+      return addDate(str(input, "name"), month, day, optionalStr(input, "note"));
+    }
+
+    case "list_important_dates": {
+      return { dates: listDates() };
+    }
+
+    case "remove_important_date": {
+      return { deleted: true, date: removeDate(int(input, "id")) };
     }
 
     default:

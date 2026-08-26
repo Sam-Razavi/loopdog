@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with fifty-one tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with fifty-four tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -121,6 +121,9 @@ everything else.
 | `set_shopping_item_checked` | Mark an item bought (or undo that) |
 | `remove_shopping_item` | Delete an item added by mistake |
 | `clear_checked_shopping_items` | Bulk-clear everything already checked off |
+| `add_important_date` | Remember a yearly date (birthday, anniversary) — nudges 7 days out and on the day |
+| `list_important_dates` | Every remembered yearly date, soonest first, with days until |
+| `remove_important_date` | Stop tracking a yearly date |
 
 ### Streaks
 
@@ -587,6 +590,19 @@ one-shot/recurring, not "things to pick up whenever." "Add milk and eggs
 to the list," "what's left to get," "got the milk," "clear the checked
 items" all just work in conversation. Checked items aren't deleted until
 cleared, so "what did I already get" still answers correctly mid-trip.
+
+### Birthdays & important dates
+
+A yearly date that actively nudges, rather than a fact sitting inert in
+memory — "remember my mom's birthday is March 3rd" gets a DM 7 days
+ahead and again on the day (both gated the same hour as the morning
+brief, since a heads-up like this is exactly the kind of thing worth
+knowing first thing). Deliberately separate from `create_reminder`'s
+recurrence, which only goes to daily/weekly, not yearly — and separate
+from `remember`, which recalls but never nudges. Adding the same
+date-plus-name twice reuses the existing entry rather than duplicating
+it, the same implicit-idempotent-by-name behavior `log_habit`/
+`log_metric` already have.
 
 ### Persistent memory
 

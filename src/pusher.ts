@@ -24,6 +24,13 @@ import { getPrices, isCurrentlyCheap } from "./electricity";
 import { hasElectricityNudgedToday, markElectricityNudged } from "./db/electricity";
 import { getActiveWarnings } from "./smhiwarnings";
 import { hasSeenWarning, markWarningSeen } from "./db/smhiwarnings";
+import {
+  hasNudgedForOccurrence,
+  listDates,
+  markNudgedForOccurrence,
+  type ImportantDateView,
+  type NudgeKind,
+} from "./db/importantdates";
 
 /**
  * Composed server-side, deliberately, not through Claude — same reasoning as
@@ -184,6 +191,55 @@ async function checkWeatherWarnings(client: Client): Promise<void> {
   } catch (error) {
     console.error("[pusher] failed to send weather warning:", error);
     // whichever warnings didn't get marked are retried next tick
+  }
+}
+
+/** Same composition philosophy as the other formatters — deterministic, no LLM call. */
+export function formatImportantDateNudge(
+  pending: { date: Pick<ImportantDateView, "name" | "note">; kind: NudgeKind }[],
+): string {
+  if (pending.length === 0) {
+    throw new Error("formatImportantDateNudge called with nothing to say");
+  }
+  return pending
+    .map(({ date, kind }) => {
+      const suffix = date.note ? ` — ${date.note}` : "";
+      return kind === "today" ? `Today: ${date.name}${suffix}.` : `In 7 days: ${date.name}${suffix}.`;
+    })
+    .join("\n");
+}
+
+/**
+ * Once a day (reuses the morning-brief hour — a birthday heads-up is
+ * exactly the kind of thing worth knowing first thing, same as calendar
+ * events/reminders, without adding a fifth LOOPDOG_*_HOUR config var just
+ * for this). Dedup is per date per occurrence-year per kind, not per day —
+ * see important_date_nudges' schema comment for why. Multiple dates due on
+ * the same tick are batched into one DM, same "don't spam one message per
+ * item" reasoning as checkAndPush/checkAtRiskNudge.
+ */
+async function checkImportantDates(client: Client): Promise<void> {
+  if (localHour() < config.morningBriefHour) return;
+
+  const pending: { date: ImportantDateView; kind: NudgeKind }[] = [];
+  for (const date of listDates()) {
+    if (date.days_until !== 0 && date.days_until !== 7) continue;
+    const kind: NudgeKind = date.days_until === 0 ? "today" : "advance";
+    const occurrenceYear = Number(date.next_occurrence.slice(0, 4));
+    if (hasNudgedForOccurrence(date.id, occurrenceYear, kind)) continue;
+    pending.push({ date, kind });
+  }
+  if (pending.length === 0) return;
+
+  try {
+    const owner = await client.users.fetch(config.ownerId);
+    await owner.send(formatImportantDateNudge(pending));
+    for (const { date, kind } of pending) {
+      markNudgedForOccurrence(date.id, Number(date.next_occurrence.slice(0, 4)), kind); // only after the send actually succeeds
+    }
+  } catch (error) {
+    console.error("[pusher] failed to send important-date nudge:", error);
+    // not marked — retried next tick, same semantics as every other check
   }
 }
 
@@ -487,6 +543,7 @@ async function tick(client: Client): Promise<void> {
   await checkAndPush(client);
   await checkAtRiskNudge(client);
   await checkElectricityNudge(client);
+  await checkImportantDates(client);
   await checkWeeklyDigest(client);
   await checkMorningBrief(client);
   await checkPageWatches(client);

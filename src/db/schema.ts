@@ -189,6 +189,35 @@ CREATE TABLE IF NOT EXISTS smhi_warnings_seen (
   seen_at TEXT NOT NULL
 );
 
+-- Recurring-by-date-only reminders — birthdays, anniversaries. Deliberately
+-- separate from reminders (which only recur daily/weekly, not yearly) and
+-- from memories (a birthday should actively nudge, not just sit recalled).
+-- month/day only, no year — nextOccurrence() in db/importantdates.ts works
+-- out the next real calendar date relative to today.
+CREATE TABLE IF NOT EXISTS important_dates (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT NOT NULL,
+  month      INTEGER NOT NULL,
+  day        INTEGER NOT NULL,
+  note       TEXT,
+  created_at TEXT NOT NULL
+);
+
+-- Dedup for the proactive nudge: one entry per date per occurrence-year per
+-- kind ('advance' = 7 days out, 'today' = the day itself), so a still-
+-- pending date isn't re-notified every tick, and next year's occurrence of
+-- the same date nudges again on its own schedule. Keyed by the occurrence
+-- year (the year the date itself falls in), not the year the DM happens to
+-- be sent in — those can differ for a late-December advance notice of an
+-- early-January date.
+CREATE TABLE IF NOT EXISTS important_date_nudges (
+  date_id INTEGER NOT NULL,
+  year    INTEGER NOT NULL,
+  kind    TEXT NOT NULL,
+  sent_at TEXT NOT NULL,
+  PRIMARY KEY (date_id, year, kind)
+);
+
 -- A running, checkable shopping/grocery list — distinct from reminders,
 -- which are timed and one-shot/recurring, not "things to pick up whenever."
 -- checked_at NULL means still needed; append-only history otherwise (a
