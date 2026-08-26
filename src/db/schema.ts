@@ -189,6 +189,22 @@ CREATE TABLE IF NOT EXISTS smhi_warnings_seen (
   seen_at TEXT NOT NULL
 );
 
+-- Free-text, day-anchored journal entries — distinct from habit_logs
+-- (boolean) and memories (standing facts injected into every prompt).
+-- Multiple entries per day allowed, no uniqueness constraint, unlike
+-- habit_logs' UNIQUE(habit_id, day) — a reflection isn't a single yes/no.
+-- Never auto-injected into the system prompt; retrieved on demand only,
+-- via get_journal_entries.
+CREATE TABLE IF NOT EXISTS journal_entries (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  day        TEXT NOT NULL,            -- YYYY-MM-DD, already 4am-adjusted
+  text       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_entries_day
+  ON journal_entries(day DESC);
+
 -- Recurring-by-date-only reminders — birthdays, anniversaries. Deliberately
 -- separate from reminders (which only recur daily/weekly, not yearly) and
 -- from memories (a birthday should actively nudge, not just sit recalled).

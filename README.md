@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with fifty-four tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with fifty-seven tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -124,6 +124,9 @@ everything else.
 | `add_important_date` | Remember a yearly date (birthday, anniversary) — nudges 7 days out and on the day |
 | `list_important_dates` | Every remembered yearly date, soonest first, with days until |
 | `remove_important_date` | Stop tracking a yearly date |
+| `add_journal_entry` | Write a free-text, day-anchored journal entry |
+| `get_journal_entries` | Retrieve entries — a specific day, a recent window, or a text search |
+| `delete_journal_entry` | Delete a journal entry |
 
 ### Streaks
 
@@ -609,6 +612,18 @@ from `remember`, which recalls but never nudges. Adding the same
 date-plus-name twice reuses the existing entry rather than duplicating
 it, the same implicit-idempotent-by-name behavior `log_habit`/
 `log_metric` already have.
+
+### Journal
+
+Free-text, day-anchored entries — "journal that I'm feeling better about
+the move" just gets written down. Different from persistent memory below
+in a way worth being explicit about: a journal entry is a point-in-time
+record, only surfaced when asked for, never injected into every future
+conversation the way a memory is. Multiple entries a day are fine, and
+retrieval supports a specific day, a rolling window of recent days, or a
+plain text search across everything. Entirely user-initiated — Loopdog
+never brings up journaling on its own, no "want to write about your day?"
+after a rough one.
 
 ### Persistent memory
 

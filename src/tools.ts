@@ -20,6 +20,7 @@ import { getMetricHistory, listMetrics, logMetric, type MetricMode } from "./db/
 import { addMemory, forgetMemory, listMemories } from "./db/memories";
 import { addItems, clearChecked, listItems, removeItem, setChecked } from "./db/shopping";
 import { addDate, listDates, removeDate } from "./db/importantdates";
+import { addEntry, deleteEntry, getEntries } from "./db/journal";
 import { renderHabitChart } from "./chart";
 import { renderMetricChart } from "./linechart";
 import { findAssociation } from "./correlations";
@@ -1003,6 +1004,53 @@ export const TOOLS: Anthropic.Tool[] = [
       required: ["id"],
     },
   },
+  {
+    name: "add_journal_entry",
+    description:
+      "Add a free-text journal entry. Call this when the user wants to " +
+      "write down or reflect on something — 'journal that...', 'write " +
+      "this down', or a clear reflection on their day. Distinct from " +
+      "remember: a journal entry is a point-in-time record, retrieved on " +
+      "demand, never injected into every future conversation the way a " +
+      "memory is. Never call this unprompted — journaling stays entirely " +
+      "user-initiated, don't suggest or ask about it out of nowhere.",
+    input_schema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "The entry text, as the user wrote or said it." },
+        day: { type: "string", description: "YYYY-MM-DD. Omit for today." },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "get_journal_entries",
+    description:
+      "Retrieve journal entries — a specific day, a recent window, or a " +
+      "text search across all of them ('what did I write about the trip " +
+      "to Gothenburg'). Call this when the user asks what they wrote, or " +
+      "about something from the past that sounds like it might be journaled.",
+    input_schema: {
+      type: "object",
+      properties: {
+        day: { type: "string", description: "A specific day, YYYY-MM-DD. Takes precedence over days if both given." },
+        days: { type: "integer", description: "How many recent days to look back over." },
+        query: { type: "string", description: "Optional text to search for within entries." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "delete_journal_entry",
+    description: "Delete a journal entry. Call when the user asks to remove one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "The entry's id, from get_journal_entries." },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -1535,6 +1583,23 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "remove_important_date": {
       return { deleted: true, date: removeDate(int(input, "id")) };
+    }
+
+    case "add_journal_entry": {
+      const day = optionalStr(input, "day") ?? localDay();
+      if (!isValidDay(day)) throw new ToolError(`"day" must be YYYY-MM-DD, got "${day}"`);
+      return addEntry(day, str(input, "text"));
+    }
+
+    case "get_journal_entries": {
+      const days = input.days === undefined ? undefined : optionalIntClamped(input, "days", 30, 1, 370);
+      return {
+        entries: getEntries({ day: optionalStr(input, "day"), days, query: optionalStr(input, "query") }),
+      };
+    }
+
+    case "delete_journal_entry": {
+      return { deleted: true, entry: deleteEntry(int(input, "id")) };
     }
 
     default:
