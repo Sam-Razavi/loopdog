@@ -42,6 +42,8 @@ export interface Config {
   electricityZone: string;
   /** Off by default — a price nudge is a more opinionated proactive DM than the on-demand tool, so it doesn't turn on just because the tool works. */
   electricityNudgeEnabled: boolean;
+  /** Optional, no default. get_weather_warnings works unfiltered (all active warnings, nationwide) without this; the proactive check does nothing until it's set, since there's no sensible region to default to watching. */
+  smhiCounty: string;
 }
 
 // Split in two so a Discord-free entry point (the REPL) can validate without
@@ -197,6 +199,7 @@ export const config: Config = {
   trafiklabApiKey: optional("TRAFIKLAB_API_KEY", ""),
   electricityZone: optional("LOOPDOG_ELECTRICITY_ZONE", "SE3"),
   electricityNudgeEnabled: optional("LOOPDOG_ELECTRICITY_NUDGE", "false").toLowerCase() === "true",
+  smhiCounty: optional("LOOPDOG_SMHI_COUNTY", ""),
 };
 
 function report(problems: string[], hint: string): void {

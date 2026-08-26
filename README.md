@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with forty-five tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with forty-six tools attached.
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -86,6 +86,7 @@ everything else.
 | `get_transit_departures` | Real-time next departures from a Stockholm (SL) stop |
 | `plan_transit_trip` | Journey planning across SL + SJ + regional operators (optional, needs a key) |
 | `get_electricity_price` | Current Swedish electricity spot price, today's range, and the cheapest upcoming window |
+| `get_weather_warnings` | Active SMHI severe-weather warnings, nationwide or filtered to a county |
 | `web_search` | Search the live web, with a synthesized short answer when confident |
 | `fetch_url` | Fetch a page and return its readable text, for summarizing or Q&A |
 | `watch_page` | Start watching a page; DMs when its content changes |
@@ -539,6 +540,28 @@ it doesn't turn on just because the tool works.
 **Worth knowing:** same unverified-in-this-sandbox caveat as SL above —
 this host was also blocked by the sandbox this was built in.
 
+### SMHI weather warnings
+
+Severe-weather warnings (storms, flooding, extreme heat/cold) from
+[SMHI](https://www.smhi.se), Sweden's met office — free, no key. More
+locally specific than `get_weather`'s generic forecast.
+`get_weather_warnings` returns everything active nationwide by default, or
+filtered to one county if asked. Set `LOOPDOG_SMHI_COUNTY` to also enable a
+proactive DM the moment a new warning affecting that county appears — off
+by default, since there's no sensible region to default to watching.
+Unlike every other proactive check in this codebase, this one runs even
+during a vacation mute: a severe weather warning is a safety matter, not
+an unprompted nudge, the same reasoning that already lets a
+Google/Hotmail connection finish during a mute.
+
+**Worth knowing:** the least-confident of the four Sweden integrations —
+same unverified-in-this-sandbox host block as the others, but SMHI's
+nested, bilingual (Swedish/English) response format also couldn't be
+pinned down with full certainty from documentation alone; the parser is
+built from SMHI's own docs plus a real, working open-source parser as
+cross-reference, and written defensively throughout, but this is the one
+most likely to need a follow-up fix against a real response.
+
 ### Web search
 
 `fetch_url` needs an exact URL already in hand; `web_search` is for "look
@@ -714,6 +737,7 @@ transcript up top happened — no Discord app was open for any of it.
 | `TRAFIKLAB_API_KEY` | — | Optional. Enables `plan_transit_trip` — free signup at trafiklab.se |
 | `LOOPDOG_ELECTRICITY_ZONE` | `SE3` | Swedish electricity price zone, SE1-SE4 |
 | `LOOPDOG_ELECTRICITY_NUDGE` | `false` | Proactive DM when the price hits today's cheapest quarter |
+| `LOOPDOG_SMHI_COUNTY` | — | Optional. Filters `get_weather_warnings` and enables the proactive new-warning DM |
 
 Missing variables are reported all at once at boot, by name.
 
@@ -754,6 +778,7 @@ src/
 ├── telegram-login.ts  one-time interactive Telegram login (`npm run telegram-login`)
 ├── transit.ts    SL departures (keyless) + Trafiklab/ResRobot trip planning (optional key)
 ├── electricity.ts  Swedish electricity spot prices, via elprisetjustnu.se (keyless)
+├── smhiwarnings.ts  SMHI severe-weather warnings (keyless)
 └── db/           SQLite: reminders, habits, metrics, memories, watches, conversation history
 ```
 

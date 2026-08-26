@@ -32,6 +32,7 @@ import { fetchReadableText } from "./webfetch";
 import { searchWeb } from "./websearch";
 import { findDepartures, planTrip } from "./transit";
 import { getElectricityOverview } from "./electricity";
+import { getActiveWarnings } from "./smhiwarnings";
 import { getWeather } from "./weather";
 import { ToolError } from "./errors";
 
@@ -340,6 +341,25 @@ export const TOOLS: Anthropic.Tool[] = [
           type: "string",
           enum: ["SE1", "SE2", "SE3", "SE4"],
           description: "Swedish price zone. Omit to use the configured default.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_weather_warnings",
+    description:
+      "Active SMHI (Swedish met office) severe-weather warnings — storms, " +
+      "flooding, extreme heat/cold, etc. Call this for 'any weather " +
+      "warnings out right now' or similar. More locally specific than " +
+      "get_weather's forecast. Returns all active warnings nationwide " +
+      "unless a county is given or configured.",
+    input_schema: {
+      type: "object",
+      properties: {
+        county: {
+          type: "string",
+          description: "Optional Swedish county/län to filter to, e.g. 'Stockholm'. Omit for all active warnings nationwide.",
         },
       },
       required: [],
@@ -1123,6 +1143,10 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "get_electricity_price": {
       return { untrusted: true, ...(await getElectricityOverview(optionalStr(input, "zone"))) };
+    }
+
+    case "get_weather_warnings": {
+      return { untrusted: true, warnings: await getActiveWarnings(optionalStr(input, "county")) };
     }
 
     case "web_search": {

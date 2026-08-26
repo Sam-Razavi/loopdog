@@ -22,6 +22,8 @@ import { addDays, dayOfWeek, formatLocal, inQuietHours, localDay, localHour, loc
 import { sweepOldTempFilesIfDue } from "./tmpfiles";
 import { getPrices, isCurrentlyCheap } from "./electricity";
 import { hasElectricityNudgedToday, markElectricityNudged } from "./db/electricity";
+import { getActiveWarnings } from "./smhiwarnings";
+import { hasSeenWarning, markWarningSeen } from "./db/smhiwarnings";
 
 /**
  * Composed server-side, deliberately, not through Claude — same reasoning as
@@ -144,6 +146,44 @@ async function checkElectricityNudge(client: Client): Promise<void> {
   } catch (error) {
     console.error("[pusher] failed to send electricity nudge:", error);
     // not marked — retried next tick, same semantics as the other checks
+  }
+}
+
+/**
+ * Opt-in via LOOPDOG_SMHI_COUNTY (no default region to watch otherwise).
+ * Dedup is per warning id, not per day — a warning can span several days
+ * and several can be active on the same day, unlike the once-a-day shape
+ * everything else here uses. Runs even during a vacation mute: a severe
+ * weather warning is exactly the kind of thing muting proactive DMs
+ * shouldn't swallow, same reasoning as the Google/Hotmail auth-poller
+ * exception, just for a different reason (safety, not "you asked for
+ * this").
+ */
+async function checkWeatherWarnings(client: Client): Promise<void> {
+  if (!config.smhiCounty) return;
+
+  let warnings: Awaited<ReturnType<typeof getActiveWarnings>>;
+  try {
+    warnings = await getActiveWarnings(config.smhiCounty);
+  } catch (error) {
+    console.error("[pusher] failed to fetch weather warnings:", error);
+    return;
+  }
+
+  const unseen = warnings.filter((w) => !hasSeenWarning(w.id));
+  if (unseen.length === 0) return;
+
+  try {
+    const owner = await client.users.fetch(config.ownerId);
+    for (const warning of unseen) {
+      await owner.send(
+        `Weather warning (${warning.level}): ${warning.event} — ${warning.areas.join(", ")}. ${warning.description}`,
+      );
+      markWarningSeen(warning.id); // only after the send actually succeeds, same as every other check
+    }
+  } catch (error) {
+    console.error("[pusher] failed to send weather warning:", error);
+    // whichever warnings didn't get marked are retried next tick
   }
 }
 
@@ -439,7 +479,11 @@ async function authTick(client: Client): Promise<void> {
 
 async function tick(client: Client): Promise<void> {
   void sweepOldTempFilesIfDue();
-  if (getMuteUntil()) return; // vacation mode: skip every proactive DM this tick
+  // Bypasses the mute gate below, deliberately — see checkWeatherWarnings's
+  // own doc comment for why a severe weather warning isn't the kind of
+  // thing vacation mode should swallow.
+  await checkWeatherWarnings(client);
+  if (getMuteUntil()) return; // vacation mode: skip every other proactive DM this tick
   await checkAndPush(client);
   await checkAtRiskNudge(client);
   await checkElectricityNudge(client);
@@ -451,17 +495,22 @@ async function tick(client: Client): Promise<void> {
 /**
  * Starts the background poll for every kind of proactive DM: overdue
  * reminders (including rolling recurring ones forward, and holding off
- * during quiet hours), the once-daily at-risk habit nudge, the once-a-week
- * Sunday digest, the once-daily morning brief, and watched-page change
- * alerts (each on its own, slower LOOPDOG_WATCH_INTERVAL_MINUTES cadence)
- * — all of it suppressed entirely while a vacation mute is active. Finishing
- * a Google or Hotmail connection the user explicitly started isn't an
- * unprompted nudge, so it runs on its own faster timer (see authTick) that
- * the mute gate never touches. Runs once
- * immediately (so a restart doesn't wait a full interval to catch anything
- * that fell due while the bot was down), then on a timer at
- * LOOPDOG_PUSH_INTERVAL_MINUTES — fine-grained enough to also catch "has
- * the nudge/digest/brief/watch interval arrived" without extra timers.
+ * during quiet hours), the once-daily at-risk habit nudge, the opt-in
+ * electricity cheap-hour nudge, the once-a-week Sunday digest, the
+ * once-daily morning brief, and watched-page change alerts (each on its
+ * own, slower LOOPDOG_WATCH_INTERVAL_MINUTES cadence) — all of it
+ * suppressed entirely while a vacation mute is active. Two things bypass
+ * the mute gate, each for its own reason: finishing a Google or Hotmail
+ * connection the user explicitly started isn't an unprompted nudge (runs
+ * on its own faster timer, see authTick, that the mute gate never
+ * touches), and a new SMHI severe-weather warning (opt-in via
+ * LOOPDOG_SMHI_COUNTY) is a safety matter mute shouldn't swallow either,
+ * so checkWeatherWarnings runs ahead of the gate inside tick() itself.
+ * Runs once immediately (so a restart doesn't wait a full interval to
+ * catch anything that fell due while the bot was down), then on a timer
+ * at LOOPDOG_PUSH_INTERVAL_MINUTES — fine-grained enough to also catch
+ * "has the nudge/digest/brief/watch interval arrived" without extra
+ * timers.
  */
 export function startScheduler(client: Client): void {
   const intervalMs = config.pushIntervalMinutes * 60_000;

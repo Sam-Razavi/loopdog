@@ -179,6 +179,16 @@ CREATE TABLE IF NOT EXISTS electricity_nudges (
   sent_at TEXT NOT NULL
 );
 
+-- Weather warnings already DMed, so a still-active one doesn't re-fire every
+-- tick — keyed by the warning's own id (real or synthesized, see
+-- smhiwarnings.ts) rather than a day, since a warning can span multiple
+-- days and multiple warnings can be active on the same day. Only relevant
+-- when LOOPDOG_SMHI_COUNTY is set; stays empty otherwise.
+CREATE TABLE IF NOT EXISTS smhi_warnings_seen (
+  id      TEXT PRIMARY KEY,
+  seen_at TEXT NOT NULL
+);
+
 -- Standing facts the user explicitly asked Loopdog to remember — distinct
 -- from conversation history, which only feeds the last ~20 turns into each
 -- response. Every memory here is injected into every system prompt, so
