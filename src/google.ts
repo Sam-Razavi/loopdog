@@ -5,28 +5,26 @@ import { ToolError } from "./errors";
 import { buildRfc822Message } from "./email";
 
 /**
- * Google account access (Calendar + Gmail) via the OAuth device flow (RFC
- * 8628) — the same pattern CLI tools and smart TVs use: no redirect URI, no
- * callback server, just a short code the user enters at a URL in any
- * browser while Loopdog polls in the background. Fits how Loopdog already
- * works (a chat bot with no public HTTP surface) far better than the
- * standard authorization-code flow would.
+ * Google Calendar access via the OAuth device flow (RFC 8628) — the same
+ * pattern CLI tools and smart TVs use: no redirect URI, no callback server,
+ * just a short code the user enters at a URL in any browser while Loopdog
+ * polls in the background. Fits how Loopdog already works (a chat bot with
+ * no public HTTP surface) far better than the standard authorization-code
+ * flow would.
  *
- * One connection covers both products, so there's only ever one OAuth dance
- * to do. Gmail scope is deliberately capped at readonly + compose — never
- * gmail.send or gmail.modify — because the safety boundary that actually
- * matters ("Loopdog can never send an email on your behalf") is enforced by
- * simply not exposing a send tool in tools.ts, not by the scope alone.
- * gmail.compose technically permits sending too, so don't rely on scope as
- * the guardrail if a send-capable function ever gets added here — the
- * guardrail is "no send tool exists," full stop.
+ * Calendar only, not Gmail — this file originally requested Gmail scopes
+ * too, on the assumption "one device-flow connection covers both products."
+ * That assumption was wrong: Google's device flow flatly rejects Gmail
+ * scopes with invalid_scope, confirmed against a real connect attempt and
+ * matching a long-standing report elsewhere (googleapis/oauth2client#88) —
+ * not a consent-screen misconfiguration, a genuine platform limitation.
+ * Gmail access would need the standard redirect-based OAuth flow instead,
+ * which needs a public callback URL Loopdog doesn't have; tracked as a
+ * separate follow-up (see isGmailUsable() below and issue #13) rather
+ * than blocking Calendar on it.
  */
 
-const SCOPE = [
-  "https://www.googleapis.com/auth/calendar.events",
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.compose",
-].join(" ");
+const SCOPE = "https://www.googleapis.com/auth/calendar.events";
 const DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
@@ -60,6 +58,24 @@ function getAuthRow(): AuthRow | undefined {
 
 export function isConnected(): boolean {
   return getAuthRow()?.status === "connected";
+}
+
+/**
+ * Always false, deliberately — Gmail scopes can't be carried by this
+ * connection's OAuth device flow at all (see this file's top comment and
+ * issue #13), so a connected Calendar session never implies Gmail is
+ * usable the way it originally did. Kept as a named function rather than
+ * inlining `false` at each call site so the reason is documented in one
+ * place and this flips cleanly if #13 ever ships.
+ */
+export function isGmailUsable(): boolean {
+  return false;
+}
+
+function requireGmailUsable(): void {
+  throw new ToolError(
+    "Gmail isn't available via the Google connection yet — Google's device-flow login doesn't support Gmail scopes. See issue #13.",
+  );
 }
 
 /** For the system prompt's live-state block — omits itself entirely when never set up. */
@@ -389,6 +405,7 @@ function extractPlainText(part: GmailPart | undefined): string | null {
  * message; fine at the maxResults this is ever called with for one person.
  */
 export async function listEmails(query: string | undefined, maxResults: number): Promise<EmailSummary[]> {
+  requireGmailUsable();
   const token = await getAccessToken();
   const listUrl = new URL(`${GMAIL_API}/messages`);
   listUrl.searchParams.set("q", query && query.trim() ? query.trim() : "in:inbox");
@@ -425,6 +442,7 @@ export async function listEmails(query: string | undefined, maxResults: number):
 }
 
 export async function getEmail(id: string): Promise<EmailSummary & { body: string }> {
+  requireGmailUsable();
   const token = await getAccessToken();
   const url = new URL(`${GMAIL_API}/messages/${id}`);
   url.searchParams.set("format", "full");
@@ -452,6 +470,7 @@ export interface DraftResult {
 
 /** Creates a Gmail draft. Never sends — there is no send function in this file, deliberately. */
 export async function createDraft(to: string, subject: string, body: string): Promise<DraftResult> {
+  requireGmailUsable();
   const token = await getAccessToken();
   const raw = Buffer.from(buildRfc822Message(to, subject, body), "utf-8")
     .toString("base64")

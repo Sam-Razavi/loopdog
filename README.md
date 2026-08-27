@@ -343,14 +343,12 @@ as if they were solid; a genuinely undefined result (nothing logged on one
 side, or a metric that hasn't varied at all) comes back as "not enough
 data," not a misleading zero.
 
-### Google: Calendar + Gmail
+### Google Calendar
 
 Entirely optional — "connect my Google account" starts it, everything else
-works identically with or without it. One connection covers both products, so
-there's only one OAuth dance to do. Once connected, `list_calendar_events` and
-`create_calendar_event` work in conversation, the morning brief leads with
-today's events ahead of reminders and at-risk habits, and `list_emails` /
-`get_email` / `create_email_draft` work for Gmail.
+works identically with or without it. Once connected, `list_calendar_events`
+and `create_calendar_event` work in conversation, and the morning brief leads
+with today's events ahead of reminders and at-risk habits.
 
 Connecting uses the OAuth **device flow** — the same pattern CLI tools and smart
 TVs use — instead of the more common browser-redirect flow, deliberately: Loopdog
@@ -362,35 +360,37 @@ background and DMs you once it's through, even during a vacation mute, since
 this is a direct result of something you asked it to do, not an unprompted
 nudge).
 
-**Email is read + draft only, on purpose.** Loopdog can read your inbox, search
-it, and write a draft — it can never send anything. There is no send-email tool
-anywhere in the codebase; that's the actual guardrail, not the OAuth scope
-(`gmail.compose` alone would technically still permit sending via the API, so
-the scope isn't relied on as the safety boundary — the absence of a send tool
-is). A draft Loopdog writes sits in Gmail's Drafts folder until you review it
-and hit send yourself.
-
 **Setup**, in [Google Cloud Console](https://console.cloud.google.com/):
 
 1. Create a project (or use an existing one).
-2. **APIs & Services → Library** → enable the **Google Calendar API** and the
-   **Gmail API**.
+2. **APIs & Services → Library** → enable the **Google Calendar API**.
 3. **APIs & Services → OAuth consent screen** → External, fill in the required
    fields, add yourself under **Test users**. "Testing" publishing status is
    fine — this never needs Google's app review for personal use.
-4. **APIs & Services → Credentials → Create Credentials → OAuth client ID** →
+4. **Data Access** → add the `calendar.events` scope explicitly (don't skip
+   this step — Google rejects a connection attempt outright if the scope isn't
+   declared here first, even though the device flow also requests it at
+   connect time).
+5. **APIs & Services → Credentials → Create Credentials → OAuth client ID** →
    application type **TVs and Limited Input devices** (the type that supports
    the device flow with no redirect URI).
-5. Copy the **Client ID** and **Client Secret** — these are `GOOGLE_CLIENT_ID`
+6. Copy the **Client ID** and **Client Secret** — these are `GOOGLE_CLIENT_ID`
    and `GOOGLE_CLIENT_SECRET`.
 
-Both are optional at boot — leave them unset and Calendar/Gmail tools just
-report "not set up yet" instead of anything breaking.
+Both are optional at boot — leave them unset and Calendar tools just report
+"not set up yet" instead of anything breaking.
 
-**Worth knowing:** this integration is code-complete and reasoned through
-carefully, but — like the very first version of the Discord bot itself —
-hasn't been exercised against a real Google account yet. The first real test
-is whoever sets up real credentials and says "connect my Google account."
+**Worth knowing — Gmail isn't part of this connection, and can't be.** The
+original design was one device-flow connection covering both Calendar and
+Gmail; that turned out to be wrong. Google's device flow flatly rejects Gmail
+scopes with `invalid_scope`, confirmed against a real connect attempt and
+matching [a long-standing public report](https://github.com/googleapis/oauth2client/issues/88)
+hitting the identical error — not a consent-screen setting, a genuine
+platform limitation. Gmail would need the standard redirect-based OAuth flow
+instead, which needs a public callback URL Loopdog doesn't have; tracked
+separately as [issue #13](https://github.com/Sam-Razavi/loopdog/issues/13)
+rather than blocking Calendar on it. `list_emails`/`get_email`/
+`create_email_draft` report Gmail as unavailable if asked for by name.
 
 ### Hotmail / Outlook
 

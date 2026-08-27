@@ -1400,7 +1400,7 @@ function resolveEmailProvider(input: Record<string, unknown>): EmailProvider {
   }
   const usable = EMAIL_PROVIDERS.filter((provider) =>
     provider === "gmail"
-      ? googleCalendar.isConnected()
+      ? googleCalendar.isGmailUsable()
       : provider === "hotmail"
         ? hotmail.isConnected()
         : privatemail.isConfigured(),
@@ -1748,7 +1748,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const maxPerSource = optionalIntClamped(input, "max_per_source", 5, 1, 15);
 
       const sources: { name: string; usable: boolean; fetch: () => Promise<unknown> }[] = [
-        { name: "gmail", usable: googleCalendar.isConnected(), fetch: () => googleCalendar.listEmails(undefined, maxPerSource) },
+        { name: "gmail", usable: googleCalendar.isGmailUsable(), fetch: () => googleCalendar.listEmails(undefined, maxPerSource) },
         { name: "hotmail", usable: hotmail.isConnected(), fetch: () => hotmail.listEmails(undefined, maxPerSource) },
         { name: "privatemail", usable: privatemail.isConfigured(), fetch: () => privatemail.listEmails(undefined, maxPerSource) },
         { name: "telegram", usable: telegram.isConfigured(), fetch: () => telegram.listChats(maxPerSource) },

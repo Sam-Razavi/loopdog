@@ -22,7 +22,7 @@ export interface Config {
   quietHoursEnd: number;
   city: string;
   watchIntervalMinutes: number;
-  /** Optional — Google Calendar/Gmail stay unavailable (a plain ToolError on use) until both are set. */
+  /** Optional — Google Calendar stays unavailable (a plain ToolError on use) until both are set. Calendar only, not Gmail — Google's device flow doesn't support Gmail scopes; see issue #13. */
   googleClientId: string;
   googleClientSecret: string;
   /** Optional — Hotmail/Outlook stays unavailable (a plain ToolError on use) until set. No secret: the device flow's public-client token exchange never sends one. */
