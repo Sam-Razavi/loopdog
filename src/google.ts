@@ -108,7 +108,8 @@ async function requestDeviceCode(): Promise<DeviceCodeResponse> {
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) {
-    throw new ToolError(`couldn't start the Google connection (HTTP ${response.status})`);
+    const body = await response.text().catch(() => "");
+    throw new ToolError(`couldn't start the Google connection (HTTP ${response.status}): ${body || "no error detail returned"}`);
   }
   return (await response.json()) as DeviceCodeResponse;
 }
