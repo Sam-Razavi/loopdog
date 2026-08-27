@@ -403,10 +403,16 @@ nudge).
 3. **APIs & Services → OAuth consent screen** → External, fill in the required
    fields, add yourself under **Test users**. "Testing" publishing status is
    fine — this never needs Google's app review for personal use.
-4. **Data Access** → add the `calendar.events` scope explicitly (don't skip
+4. **Data Access** → add the `.../auth/calendar` scope explicitly (don't skip
    this step — Google rejects a connection attempt outright if the scope isn't
    declared here first, even though the device flow also requests it at
-   connect time).
+   connect time). Use the broad `calendar` scope, not the narrower
+   `calendar.events` — Google's device flow accepts a fixed allowlist of
+   scopes per API, and `calendar.events` isn't on it (confirmed against a
+   real production device-flow integration, Home Assistant's Google Calendar
+   component, which uses the same broad scope for the same reason). It grants
+   more than Loopdog uses under the hood, but it's the one that actually
+   works with this connection method.
 5. **APIs & Services → Credentials → Create Credentials → OAuth client ID** →
    application type **TVs and Limited Input devices** (the type that supports
    the device flow with no redirect URI).

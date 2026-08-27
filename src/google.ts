@@ -22,9 +22,26 @@ import { buildRfc822Message } from "./email";
  * which needs a public callback URL Loopdog doesn't have; tracked as a
  * separate follow-up (see isGmailUsable() below and issue #13) rather
  * than blocking Calendar on it.
+ *
+ * Second scope surprise, same shape as the Gmail one: `calendar.events`
+ * (the narrow "read/write events only" scope) *also* gets invalid_scope
+ * from the device flow, even after Gmail was dropped and even with the
+ * scope explicitly declared on the OAuth consent screen. Google's
+ * device/limited-input-device flow only accepts scopes off a fixed
+ * allowlist, and that allowlist doesn't include every scope string a
+ * given API supports — it's evidently per-scope, not per-API. Confirmed
+ * by cross-checking a real, large, production device-flow integration:
+ * Home Assistant's Google Calendar component requests
+ * `https://www.googleapis.com/auth/calendar` (the broad, whole-calendar
+ * scope) for read-write access, never `calendar.events`
+ * (homeassistant/components/google/const.py). Switched to that broader
+ * scope here for the same reason — it's the one Google's device flow
+ * actually allows. It grants more than Loopdog uses (calendar list/
+ * settings management, not just events), which is a real trade-off, but
+ * there's no narrower alternative that works with this flow.
  */
 
-const SCOPE = "https://www.googleapis.com/auth/calendar.events";
+const SCOPE = "https://www.googleapis.com/auth/calendar";
 const DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
