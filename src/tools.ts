@@ -672,9 +672,13 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
   {
     name: "connect_google",
     description:
-      "Connect the user's Google account (Calendar + Gmail, one connection " +
-      "covers both). Call this when the user asks to connect, set up, or link " +
-      "their calendar or email, or asks 'did it connect?' / 'is it connected?' " +
+      "Connect the user's Google account for Calendar access. Does NOT " +
+      "cover Gmail — Google's device flow can't carry Gmail scopes, so " +
+      "this connection is Calendar-only regardless of what the user asks " +
+      "for; if they want Gmail, say it isn't available yet (tracked, not " +
+      "fixable by retrying — see connect_hotmail for a working email " +
+      "option). Call this when the user asks to connect, set up, or link " +
+      "their calendar, or asks 'did it connect?' / 'is it connected?' " +
       "after starting the process. Re-invokable and idempotent: if a " +
       "connection attempt is already in progress, this checks it instead of " +
       "starting a new one; if already connected, it says so. On first call it " +
@@ -685,9 +689,10 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
   {
     name: "disconnect_google",
     description:
-      "Disconnect the Google account. Call when the user asks to unlink or " +
-      "disconnect calendar or email access — this removes both at once, " +
-      "since they share one connection.",
+      "Disconnect the Google account (Calendar access only — this " +
+      "connection was never Gmail, so there's nothing Gmail-related to " +
+      "remove). Call when the user asks to unlink or disconnect their " +
+      "calendar.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
@@ -732,9 +737,9 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
   {
     name: "connect_hotmail",
     description:
-      "Connect a Hotmail/Outlook/Live account (Microsoft) for email — a " +
-      "separate account and connection from Gmail; both can be connected " +
-      "at once. Call this when the user asks to connect, set up, or link " +
+      "Connect a Hotmail/Outlook/Live account (Microsoft) for email — this " +
+      "is a real, working email connection, unlike connect_google (Calendar " +
+      "only, no Gmail). Call this when the user asks to connect, set up, or link " +
       "their Hotmail or Outlook, or asks 'did it connect?' / 'is it " +
       "connected?' after starting the process. Re-invokable and idempotent, " +
       "same pattern as connect_google: if a connection attempt is already " +
@@ -746,7 +751,7 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "disconnect_hotmail",
-    description: "Disconnect the Hotmail/Outlook account. Doesn't affect a separate Gmail connection.",
+    description: "Disconnect the Hotmail/Outlook account.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
