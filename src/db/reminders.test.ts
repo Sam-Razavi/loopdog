@@ -38,6 +38,25 @@ function overdueIso(): string {
   return new Date(Date.now() - 60_000).toISOString();
 }
 
+test("kind defaults to 'text' and round-trips 'calendar' through create/list/get", async () => {
+  const { createReminder, getReminder, listUnnotifiedOverdue } = await reminders();
+
+  const plain = createReminder("call the dentist", overdueIso());
+  assert.equal(plain.kind, "text");
+  assert.equal(getReminder(plain.id)?.kind, "text");
+
+  const calendarCheck = createReminder("morning calendar check", overdueIso(), "daily", "calendar");
+  assert.equal(calendarCheck.kind, "calendar");
+  assert.equal(getReminder(calendarCheck.id)?.kind, "calendar");
+
+  const overdueKinds = listUnnotifiedOverdue().filter((r) => r.id === plain.id || r.id === calendarCheck.id);
+  assert.deepEqual(
+    overdueKinds.map((r) => r.kind).sort(),
+    ["calendar", "text"],
+    "both kinds show up in the overdue feed — the pusher is what splits them apart, not this layer",
+  );
+});
+
 test("completing a one-shot reminder finishes it and clears the push queue", async () => {
   const { createReminder, completeReminder, listReminders, listUnnotifiedOverdue } =
     await reminders();

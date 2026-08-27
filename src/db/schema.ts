@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS reminders (
   created_at   TEXT NOT NULL,
   completed_at TEXT,                   -- NULL while pending
   notified_at  TEXT,                   -- NULL until the reminder has been pushed
-  recurrence   TEXT                    -- NULL, 'daily', or 'weekly'
+  recurrence   TEXT,                   -- NULL, 'daily', or 'weekly'
+  kind         TEXT                    -- NULL/'text' (push the reminder's own text) or 'calendar'
+                                        -- (push live Google Calendar events instead, see pusher.ts)
 );
 
 CREATE INDEX IF NOT EXISTS idx_reminders_pending

@@ -348,6 +348,20 @@ then quietly rolls its due time forward to the next one — no "complete" step
 required. Completing it the normal way still works and stops the recurrence, for
 when you're actually done with it.
 
+### Scheduled calendar checks
+
+"Check my calendar every morning at 8 and tell me what's on it" works the same
+way as a recurring reminder — because under the hood it *is* one, just marked
+to pull live events instead of firing fixed wording. At the scheduled time,
+Loopdog fetches the calendar fresh (every calendar the account can see, same
+as `list_calendar_events`, not just the default one) and sends whatever's on
+it that day, instead of repeating what you originally said. One-shot works
+too: "check my calendar at 3pm today." It needs Google Calendar connected —
+see below — but doesn't need it connected *yet*: if it isn't when the check
+comes due, it fires once, says so, and moves on rather than silently never
+firing. Since it's really just a reminder with a different push behavior,
+listing, editing, and deleting it work exactly like any other reminder.
+
 ### Undo and edit
 
 Habit logs and reminders don't need to be deleted and recreated over a mistake.

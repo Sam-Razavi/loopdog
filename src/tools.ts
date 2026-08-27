@@ -12,6 +12,7 @@ import {
   listReminders,
   updateReminder,
   type Recurrence,
+  type ReminderKind,
   type ReminderStatus,
 } from "./db/reminders";
 import { getHabitDetail, listHabits, logHabit, unlogHabit } from "./db/habits";
@@ -58,7 +59,10 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
       "at a particular time. Resolve relative phrasing like 'tomorrow at 9am' or " +
       "'in two hours' against the current local time given in the system prompt. " +
       "For something that repeats — 'every day', 'every Monday' — set recurrence " +
-      "instead of asking the user to recreate it each time.",
+      "instead of asking the user to recreate it each time. For 'check my " +
+      "calendar every morning at 8' or similar — the user wants a live calendar " +
+      "pull at a scheduled time, not to be told fixed wording — set kind to " +
+      "'calendar' instead of creating a plain reminder.",
     input_schema: {
       type: "object",
       properties: {
@@ -66,7 +70,10 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
           type: "string",
           description:
             "What to be reminded of, phrased as the user would recognise it. " +
-            "Keep their wording where possible: 'stretch', not 'perform stretching'.",
+            "Keep their wording where possible: 'stretch', not 'perform stretching'. " +
+            "For kind 'calendar', use a short label instead — it's shown in reminder " +
+            "lists, but the actual push message is generated live from the calendar, " +
+            "not this text — e.g. 'morning calendar check'.",
         },
         due_at: {
           type: "string",
@@ -81,6 +88,18 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
             "Omit for a one-shot reminder. 'daily' for 'every day', 'weekly' for " +
             "'every Monday' or similar. Once pushed, it rolls forward to its next " +
             "occurrence automatically — no need for the user to recreate it.",
+        },
+        kind: {
+          type: "string",
+          enum: ["text", "calendar"],
+          description:
+            "Omit for a normal reminder (default 'text', pushes the reminder's own " +
+            "wording). Set to 'calendar' for 'check my calendar and tell me what's on " +
+            "it' at a scheduled time — at push time this fetches that day's events " +
+            "live from every calendar the account can see (same as " +
+            "list_calendar_events) and sends those instead of fixed text. Needs " +
+            "Google Calendar connected — if it isn't yet when this fires, it says so " +
+            "once rather than never firing.",
         },
       },
       required: ["text", "due_at"],
@@ -1431,6 +1450,15 @@ function optionalRecurrence(
   return value;
 }
 
+function optionalKind(input: Record<string, unknown>, key: string): ReminderKind {
+  const value = optionalStr(input, key);
+  if (value === undefined) return "text";
+  if (value !== "text" && value !== "calendar") {
+    throw new ToolError(`"${key}" must be "text" or "calendar", got "${value}"`);
+  }
+  return value;
+}
+
 function num(input: Record<string, unknown>, key: string): number {
   const value = input[key];
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -1518,6 +1546,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
         str(input, "text"),
         toUtcIso(str(input, "due_at")),
         optionalRecurrence(input, "recurrence"),
+        optionalKind(input, "kind"),
       );
     }
 

@@ -74,7 +74,11 @@ async function checkAndPush(client: Client): Promise<void> {
   // the same retry-on-next-tick behavior already used for a failed send.
   if (inQuietHours()) return;
 
-  const overdue = listUnnotifiedOverdue();
+  // 'calendar'-kind reminders are handled separately by
+  // checkCalendarReminders below — same underlying overdue query, split by
+  // kind so a scheduled calendar check doesn't also get pushed here as its
+  // own (unused) placeholder text.
+  const overdue = listUnnotifiedOverdue().filter((r) => r.kind === "text");
   if (overdue.length === 0) return;
 
   try {
@@ -92,6 +96,64 @@ async function checkAndPush(client: Client): Promise<void> {
     }
   } catch (error) {
     console.error("[pusher] failed to send reminder push:", error);
+  }
+}
+
+/** Same composition philosophy as the other formatters — deterministic, no LLM call. */
+export function formatCalendarCheckMessage(label: string, events: googleCalendar.CalendarEvent[]): string {
+  if (events.length === 0) return `${label}: nothing on the calendar today.`;
+  return [`${label}:`, ...events.map((e) => `  - ${e.summary} (${formatEventTime(e.start)})`)].join("\n");
+}
+
+/**
+ * The 'calendar'-kind half of the reminders table: at push time, fetch
+ * live events instead of firing the reminder's own text — for "check my
+ * calendar every morning at 8 and tell me what's on it" rather than a
+ * fixed-wording reminder. Reuses the exact due-time/recurrence machinery
+ * reminders already have (one-shot or daily/weekly), so list/complete/
+ * delete/update all work on one of these the same way they work on any
+ * other reminder, for free.
+ *
+ * Same "today" window as the morning brief (listEvents(1)) — simplest
+ * consistent default rather than a second configurable window just for
+ * this.
+ *
+ * Not connected is treated as a real (if unwelcome) outcome, not a
+ * transient failure: it fires once, says so, and still advances/marks
+ * notified like a successful push, rather than silently retrying forever
+ * every tick until the user happens to reconnect. An actual fetch error
+ * (network blip, expired token needing a fresh connect_google) is the
+ * transient case — that one's skipped and retried next tick, same as
+ * every other fetch failure in this file.
+ */
+async function checkCalendarReminders(client: Client): Promise<void> {
+  if (inQuietHours()) return;
+
+  const due = listUnnotifiedOverdue().filter((r) => r.kind === "calendar");
+  if (due.length === 0) return;
+
+  for (const reminder of due) {
+    let message: string;
+    if (!googleCalendar.isConnected()) {
+      message = `${reminder.text}: Google Calendar isn't connected — ask me to connect_google first.`;
+    } else {
+      try {
+        message = formatCalendarCheckMessage(reminder.text, await googleCalendar.listEvents(1));
+      } catch (error) {
+        console.error(`[pusher] failed to fetch calendar events for reminder ${reminder.id}:`, error);
+        continue; // retried next tick — this one's transient, unlike "not connected" above
+      }
+    }
+
+    try {
+      const owner = await client.users.fetch(config.ownerId);
+      await owner.send(message);
+      if (reminder.recurrence) advanceRecurrence(reminder.id);
+      else markNotified(reminder.id);
+    } catch (error) {
+      console.error(`[pusher] failed to send calendar check for reminder ${reminder.id}:`, error);
+      // not marked — retried next tick, same semantics as checkAndPush
+    }
   }
 }
 
@@ -605,6 +667,7 @@ async function tick(client: Client): Promise<void> {
   await checkWeatherWarnings(client);
   if (getMuteUntil()) return; // vacation mode: skip every other proactive DM this tick
   await checkAndPush(client);
+  await checkCalendarReminders(client);
   await checkAtRiskNudge(client);
   await checkElectricityNudge(client);
   await checkImportantDates(client);
@@ -616,7 +679,9 @@ async function tick(client: Client): Promise<void> {
 /**
  * Starts the background poll for every kind of proactive DM: overdue
  * reminders (including rolling recurring ones forward, and holding off
- * during quiet hours), the once-daily at-risk habit nudge, the opt-in
+ * during quiet hours), scheduled calendar checks (the same reminders
+ * table's 'calendar' kind — a live calendar pull instead of fixed text),
+ * the once-daily at-risk habit nudge, the opt-in
  * electricity cheap-hour nudge, the once-a-week Sunday digest (now also
  * folding in Canvas assignments and Swedish holidays due in the coming
  * week, when Canvas is configured), the once-daily morning brief (same

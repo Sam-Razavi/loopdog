@@ -42,6 +42,7 @@ export function migrate(): void {
   getDb().exec(SCHEMA);
   ensureColumn("reminders", "notified_at", "notified_at TEXT");
   ensureColumn("reminders", "recurrence", "recurrence TEXT");
+  ensureColumn("reminders", "kind", "kind TEXT");
   backfillReminderCompletions();
 }
 

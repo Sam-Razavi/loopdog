@@ -3,6 +3,16 @@ import { advanceLocalInstant, formatLocal, nowUtcIso } from "../time";
 
 export type Recurrence = "daily" | "weekly";
 
+/**
+ * 'text' (the default) pushes the reminder's own wording, same as always.
+ * 'calendar' pushes live Google Calendar events instead — see
+ * pusher.ts's checkCalendarReminders, which is the only thing that treats
+ * this differently from a plain reminder; everything else in this file
+ * (listing, completing, editing, recurrence) doesn't care which kind a row
+ * is.
+ */
+export type ReminderKind = "text" | "calendar";
+
 export interface ReminderRow {
   id: number;
   text: string;
@@ -11,6 +21,7 @@ export interface ReminderRow {
   completed_at: string | null;
   notified_at: string | null;
   recurrence: Recurrence | null;
+  kind: ReminderKind | null;
 }
 
 /** The shape handed back to Claude — absolute time plus a readable local one. */
@@ -22,6 +33,7 @@ export interface ReminderView {
   overdue: boolean;
   completed_at: string | null;
   recurrence: Recurrence | null;
+  kind: ReminderKind;
 }
 
 export type ReminderStatus = "pending" | "completed" | "all";
@@ -35,6 +47,7 @@ function view(row: ReminderRow, now = nowUtcIso()): ReminderView {
     overdue: row.completed_at === null && row.due_at <= now,
     completed_at: row.completed_at,
     recurrence: row.recurrence,
+    kind: row.kind ?? "text",
   };
 }
 
@@ -42,13 +55,14 @@ export function createReminder(
   text: string,
   dueAtUtc: string,
   recurrence: Recurrence | null = null,
+  kind: ReminderKind = "text",
 ): ReminderView {
   const now = nowUtcIso();
   const result = getDb()
     .prepare(
-      `INSERT INTO reminders (text, due_at, created_at, recurrence) VALUES (?, ?, ?, ?)`,
+      `INSERT INTO reminders (text, due_at, created_at, recurrence, kind) VALUES (?, ?, ?, ?, ?)`,
     )
-    .run(text, dueAtUtc, now, recurrence);
+    .run(text, dueAtUtc, now, recurrence, kind);
   return view(getReminder(Number(result.lastInsertRowid))!, now);
 }
 

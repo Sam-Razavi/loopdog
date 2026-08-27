@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatAtRiskNudge, formatDigest, formatImportantDateNudge, formatMorningBrief, formatPushMessage } from "./pusher";
+import {
+  formatAtRiskNudge,
+  formatCalendarCheckMessage,
+  formatDigest,
+  formatImportantDateNudge,
+  formatMorningBrief,
+  formatPushMessage,
+} from "./pusher";
 import type { WeeklyHabitStat } from "./pusher";
 import type { ReminderView, Recurrence } from "./db/reminders";
 import type { HabitSummary } from "./db/habits";
@@ -25,6 +32,7 @@ function reminder(overrides: Partial<ReminderView> = {}): ReminderView {
     overdue: true,
     completed_at: null,
     recurrence: null as Recurrence | null,
+    kind: "text",
     ...overrides,
   };
 }
@@ -212,6 +220,18 @@ test("morning brief shows an all-day event distinctly from a timed one", () => {
 
 test("morning brief with nothing at all — no reminders, habits, or events — is still a programming error", () => {
   assert.throws(() => formatMorningBrief([], [], []), /nothing to say/);
+});
+
+test("calendar check message lists today's events under the reminder's own label", () => {
+  const message = formatCalendarCheckMessage("morning calendar check", [calendarEvent({ summary: "Dentist" })]);
+  const lines = message.split("\n");
+  assert.equal(lines[0], "morning calendar check:");
+  assert.match(lines[1]!, /Dentist/);
+});
+
+test("calendar check message with no events says so plainly, doesn't throw", () => {
+  const message = formatCalendarCheckMessage("morning calendar check", []);
+  assert.equal(message, "morning calendar check: nothing on the calendar today.");
 });
 
 test("morning brief with only a Canvas assignment due today lists it under 'Due on Canvas today'", () => {
