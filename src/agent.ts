@@ -3,7 +3,7 @@ import { config } from "./config";
 import { appendTurn, recentTurns } from "./db/history";
 import type { SupportedImageType } from "./imagetype";
 import { buildSystemPrompt } from "./prompt";
-import { runTool, ToolError, TOOLS } from "./tools";
+import { buildTools, runTool, ToolError } from "./tools";
 
 export type { SupportedImageType };
 
@@ -11,7 +11,43 @@ const MAX_TOOL_ROUNDS = 6;
 const HISTORY_TURNS = 20;
 const MAX_TOKENS = 4096;
 
+/**
+ * Sonnet 5 rates, USD per million tokens. Cache writes bill at 1.25x input
+ * (5-minute TTL, the one used here), cache reads at 0.1x. Only used for the
+ * log line below — nothing branches on it, so a stale rate misreports a
+ * number in the logs but can never change behaviour.
+ */
+const RATE_IN = 2 / 1_000_000;
+const RATE_OUT = 10 / 1_000_000;
+
+interface UsageTotals {
+  rounds: number;
+  input: number;
+  cacheWrite: number;
+  cacheRead: number;
+  output: number;
+}
+
+/**
+ * One line per reply, so "why is this expensive" is arithmetic instead of
+ * guesswork, and so the prompt cache is self-verifying: on any message that
+ * takes more than one round, cache_read should dominate from round 2 on. If
+ * it stays at 0, something is invalidating the prefix (see buildSystemPrompt).
+ */
+function logUsage(t: UsageTotals): void {
+  const cost =
+    t.input * RATE_IN + t.cacheWrite * RATE_IN * 1.25 + t.cacheRead * RATE_IN * 0.1 + t.output * RATE_OUT;
+  console.log(
+    `[usage] rounds=${t.rounds} in=${t.input} cache_write=${t.cacheWrite} ` +
+      `cache_read=${t.cacheRead} out=${t.output} ~$${cost.toFixed(4)}`,
+  );
+}
+
 const client = new Anthropic({ apiKey: config.anthropicApiKey });
+
+// Built once: the tool list is the first thing in the prompt-cache prefix, so it
+// must be byte-identical across calls or every request would miss the cache.
+const TOOLS = buildTools();
 
 function textOf(message: Anthropic.Message): string {
   return message.content
@@ -87,6 +123,7 @@ async function respondInner(userText: string, images: ImageInput[] = []): Promis
   const system = buildSystemPrompt();
   let reply = "";
   const attachments: string[] = [];
+  const usage: UsageTotals = { rounds: 0, input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     const response = await client.messages.create({
@@ -100,9 +137,20 @@ async function respondInner(userText: string, images: ImageInput[] = []): Promis
       // here. Effort is the latency dial instead.
       thinking: { type: "adaptive" },
       output_config: { effort: config.effort },
+      // Explicit breakpoint in buildSystemPrompt() pins tools + static system
+      // (the expensive shared prefix); this auto-caches the growing tail so
+      // rounds 2+ of a tool loop re-read it instead of re-paying for it.
+      cache_control: { type: "ephemeral" },
     });
 
+    usage.rounds += 1;
+    usage.input += response.usage.input_tokens;
+    usage.cacheWrite += response.usage.cache_creation_input_tokens ?? 0;
+    usage.cacheRead += response.usage.cache_read_input_tokens ?? 0;
+    usage.output += response.usage.output_tokens;
+
     if (response.stop_reason === "refusal") {
+      logUsage(usage);
       return {
         text: "That one tripped a safety filter on my end. Try rephrasing?",
         attachments,
@@ -158,6 +206,8 @@ async function respondInner(userText: string, images: ImageInput[] = []): Promis
 
     messages.push({ role: "user", content: results });
   }
+
+  logUsage(usage);
 
   if (!reply) reply = "Nothing to say to that, apparently. Try again?";
 

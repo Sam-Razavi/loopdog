@@ -55,7 +55,16 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with seventy-one tools attached.
+Every message goes to Claude (`claude-sonnet-5`) with up to seventy-one tools
+attached — only the ones that can actually run. Tools belonging to an
+integration with no credentials configured (Canvas, smart plugs, the vacuum,
+Telegram, email, trip planning, web search) are left out of the request
+entirely, since their schemas cost tokens on every single call and could only
+ever answer "not set up yet." The system prompt names what's missing instead,
+so asking for one still gets a useful "that isn't set up yet" rather than a
+flat refusal. Configure an integration and its tools reappear on the next
+deploy.
+
 Claude decides what to call and what to say; the bot is a thin harness around that
 loop. State lives in a local SQLite file, so everything survives a restart.
 
@@ -115,7 +124,7 @@ everything else.
 | `list_metrics` | Everything numeric being tracked, with today's value |
 | `metric_chart` | A trend-line image of a metric's recent history, as a Discord attachment |
 | `find_correlation` | Raw stats on how two habits/metrics relate — a rate difference, an average difference, or a correlation coefficient |
-| `connect_google` | Start or check a Google connection — Calendar + Gmail together (optional, see below) |
+| `connect_google` | Start or check a Google Calendar connection (optional, see below) |
 | `disconnect_google` | Unlink the Google account |
 | `list_calendar_events` | Upcoming events, once connected |
 | `create_calendar_event` | Add an event to the calendar |
@@ -141,6 +150,33 @@ everything else.
 | `add_journal_entry` | Write a free-text, day-anchored journal entry |
 | `get_journal_entries` | Retrieve entries — a specific day, a recent window, or a text search |
 | `delete_journal_entry` | Delete a journal entry |
+
+### What a message costs
+
+Every API round re-sends the same prefix — the tool schemas plus the static
+half of the system prompt — so the fixed overhead, not the conversation, is
+what dominates the bill. Two things keep it down:
+
+- **Prompt caching.** `buildSystemPrompt()` returns two blocks split on
+  stability: everything fixed for the process lifetime (persona, rules,
+  examples) carries a cache breakpoint, and everything that changes per call
+  (the clock, overdue reminders, at-risk streaks, connection status) sits
+  after it in `liveState()`. Because the cache prefix renders
+  `tools → system → messages`, that one breakpoint covers the tool schemas
+  too. Rounds after the first re-read ~10K tokens at a tenth of the price
+  instead of paying full freight again. **If you add anything dynamic to the
+  static block, caching silently stops paying** — there's a test that fails
+  if the clock leaks in.
+- **Gating unconfigured tools** (above), which shrinks that cached prefix
+  further.
+
+Measured on this codebase: a two-round message costs ~42% less than before,
+a four-round one ~63% less.
+
+Every reply logs one line — `[usage] rounds=2 in=… cache_write=… cache_read=…
+out=… ~$0.0123` — so cost is arithmetic rather than guesswork, and the cache
+is self-verifying: if `cache_read` stays 0 across rounds, something is
+invalidating the prefix.
 
 ### Streaks
 

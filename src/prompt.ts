@@ -1,3 +1,4 @@
+import type Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config";
 import { habitsAtRisk } from "./db/habits";
 import { listMemories } from "./db/memories";
@@ -8,6 +9,7 @@ import { getStatus as getHotmailStatus } from "./hotmail";
 import { getStatus as getPrivatemailStatus } from "./privatemail";
 import { getStatus as getTelegramStatus } from "./telegram";
 import { currentOffset, formatLocal, localDay } from "./time";
+import { unavailableIntegrationLabels } from "./tools";
 
 // Voice compass: the friend who never makes it weird. Understated, doesn't
 // manage feelings, doesn't perform concern, says the true thing and moves on.
@@ -222,6 +224,46 @@ function liveState(): string {
   return lines.join("\n");
 }
 
-export function buildSystemPrompt(): string {
-  return [PERSONA, nameGuidance(), RULES, EXAMPLES, liveState()].join("\n\n");
+/**
+ * Names the integrations with no credentials configured. Their tools are
+ * dropped from the tool list entirely (see buildTools in tools.ts) because
+ * the schemas cost real tokens on every call and could only ever error — but
+ * without this line the model would answer "I can't do that" instead of the
+ * far more useful "Canvas isn't set up yet." Static per process, so it rides
+ * inside the cached block below at effectively zero marginal cost.
+ */
+function unavailableNote(): string {
+  const labels = unavailableIntegrationLabels();
+  if (labels.length === 0) return "";
+  return (
+    `Not set up on this deployment, so you have no tools for them: ${labels.join(", ")}. ` +
+    `If asked for one of these, say plainly that it isn't set up yet rather than implying you can't do it at all.`
+  );
+}
+
+/**
+ * Two blocks, split on stability — this is what makes prompt caching work.
+ *
+ * Everything static (persona, rules, examples, the name and unavailable-
+ * integration notes, all fixed for the process lifetime) goes in the first
+ * block with a cache breakpoint on it. Because the cache prefix renders
+ * tools -> system -> messages, that one breakpoint covers the tool schemas
+ * *and* this block together — the ~10K tokens that used to be re-sent at full
+ * price on every single API round.
+ *
+ * Everything that changes per call — the clock, overdue reminders, at-risk
+ * streaks, mute and connection status — stays in the second block, after the
+ * breakpoint, where it can vary freely without invalidating anything.
+ *
+ * Adding anything dynamic to the first block would silently break the cache
+ * on every request. Keep new volatile state in liveState().
+ */
+export function buildSystemPrompt(): Anthropic.TextBlockParam[] {
+  const stable = [PERSONA, nameGuidance(), RULES, EXAMPLES, unavailableNote()]
+    .filter(Boolean)
+    .join("\n\n");
+  return [
+    { type: "text", text: stable, cache_control: { type: "ephemeral" } },
+    { type: "text", text: liveState() },
+  ];
 }

@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
+import { config } from "./config";
 import { backupDatabase } from "./db";
 import {
   createReminder,
@@ -48,7 +49,7 @@ import { ToolError } from "./errors";
 
 export { ToolError };
 
-export const TOOLS: Anthropic.Tool[] = [
+export const ALL_TOOLS: Anthropic.Tool[] = [
   {
     name: "create_reminder",
     description:
@@ -1254,6 +1255,92 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
 ];
+
+/**
+ * Tools whose integration needs credentials, and the config that supplies
+ * them. Anything listed here is dropped from the tool list when its
+ * integration isn't configured — those schemas cost real tokens on every
+ * single API call (measured: 18 tools ≈ 2,900 tokens, 27% of the tool
+ * budget) and can only ever return "not set up yet."
+ *
+ * Gated on *configured*, never on *connected*. A configured-but-unconnected
+ * tool still gives an actionable error ("call connect_google first"), so it
+ * earns its place; an unconfigured one can never work at all.
+ */
+function unavailableIntegrations(): { label: string; tools: string[] }[] {
+  const anyEmail =
+    // Gmail is deliberately excluded — Google's device flow can't carry Gmail
+    // scopes, so a connected Google account still isn't a usable mailbox (#13).
+    Boolean(config.hotmailClientId) ||
+    Boolean(config.privatemailEmail && config.privatemailPassword);
+  const telegram = Boolean(
+    config.telegramApiId && config.telegramApiHash && config.telegramSession,
+  );
+
+  const gates: { label: string; ok: boolean; tools: string[] }[] = [
+    {
+      label: "Canvas (coursework)",
+      ok: Boolean(config.canvasBaseUrl && config.canvasApiToken),
+      tools: [
+        "list_canvas_courses",
+        "list_canvas_assignments",
+        "list_canvas_announcements",
+        "list_canvas_grades",
+      ],
+    },
+    {
+      label: "smart plugs",
+      ok: Boolean(config.tuyaAccessId && config.tuyaAccessSecret && config.tuyaUid),
+      tools: ["list_smart_devices", "set_smart_device_power"],
+    },
+    {
+      label: "the vacuum",
+      ok: Boolean(config.roborockUserData),
+      tools: ["start_vacuum", "stop_vacuum", "get_vacuum_status"],
+    },
+    {
+      label: "Telegram",
+      ok: telegram,
+      tools: ["list_telegram_chats", "get_telegram_messages"],
+    },
+    {
+      label: "Google Calendar",
+      ok: Boolean(config.googleClientId && config.googleClientSecret),
+      tools: ["connect_google", "list_calendar_events", "create_calendar_event"],
+    },
+    { label: "Hotmail", ok: Boolean(config.hotmailClientId), tools: ["connect_hotmail"] },
+    {
+      label: "email",
+      ok: anyEmail,
+      tools: ["list_emails", "get_email", "create_email_draft"],
+    },
+    { label: "cross-inbox check", ok: anyEmail || telegram, tools: ["check_all_inboxes"] },
+    { label: "trip planning", ok: Boolean(config.trafiklabApiKey), tools: ["plan_transit_trip"] },
+    { label: "web search", ok: Boolean(config.tavilyApiKey), tools: ["web_search"] },
+  ];
+
+  return gates.filter((g) => !g.ok).map(({ label, tools }) => ({ label, tools }));
+}
+
+/** Human-readable names of what isn't set up — for the system prompt, so a
+ *  dropped tool still produces "Canvas isn't set up yet" rather than a vague
+ *  "I can't do that". Costs ~40 tokens instead of the ~2,900 the schemas did. */
+export function unavailableIntegrationLabels(): string[] {
+  return unavailableIntegrations().map((g) => g.label);
+}
+
+/**
+ * The tool list actually sent to the model. Filters ALL_TOOLS (which stays
+ * the single source of truth, so the tool/dispatch cross-check still reads
+ * one array) down to integrations that could actually run. Deterministic and
+ * stable for the process lifetime — important, because the tool list is the
+ * first thing in the prompt-cache prefix, so any instability here would
+ * invalidate the cache on every call.
+ */
+export function buildTools(): Anthropic.Tool[] {
+  const dropped = new Set(unavailableIntegrations().flatMap((g) => g.tools));
+  return dropped.size === 0 ? ALL_TOOLS : ALL_TOOLS.filter((t) => !dropped.has(t.name));
+}
 
 function asRecord(input: unknown): Record<string, unknown> {
   if (typeof input !== "object" || input === null) {
