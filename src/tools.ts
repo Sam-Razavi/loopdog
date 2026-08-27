@@ -698,9 +698,12 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
   {
     name: "list_calendar_events",
     description:
-      "List upcoming Google Calendar events. Call this for any question about " +
-      "what's on the calendar. Fails with a plain error if not connected yet — " +
-      "tell the user to ask you to connect_google first.",
+      "List upcoming Google Calendar events, across every calendar the " +
+      "account can see (not just the default one — a secondary or shared " +
+      "calendar's events come back too, each tagged with which calendar " +
+      "it's from). Call this for any question about what's on the " +
+      "calendar. Fails with a plain error if not connected yet — tell the " +
+      "user to ask you to connect_google first.",
     input_schema: {
       type: "object",
       properties: {

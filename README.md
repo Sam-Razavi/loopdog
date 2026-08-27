@@ -384,7 +384,10 @@ data," not a misleading zero.
 Entirely optional — "connect my Google account" starts it, everything else
 works identically with or without it. Once connected, `list_calendar_events`
 and `create_calendar_event` work in conversation, and the morning brief leads
-with today's events ahead of reminders and at-risk habits.
+with today's events ahead of reminders and at-risk habits. Listing checks
+every calendar the account can see (a secondary or shared calendar included,
+not just the default one), the same set Google's own apps show; creating an
+event always goes to the default calendar.
 
 Connecting uses the OAuth **device flow** — the same pattern CLI tools and smart
 TVs use — instead of the more common browser-redirect flow, deliberately: Loopdog

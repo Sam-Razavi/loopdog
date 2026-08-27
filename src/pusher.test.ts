@@ -180,6 +180,7 @@ function calendarEvent(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
     summary: "Team sync",
     start: "2026-08-12T07:00:00.000Z",
     end: "2026-08-12T07:30:00.000Z",
+    calendar: "primary",
     ...overrides,
   };
 }

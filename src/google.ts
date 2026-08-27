@@ -45,7 +45,9 @@ const SCOPE = "https://www.googleapis.com/auth/calendar";
 const DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
-const CALENDAR_API = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+const CALENDAR_LIST_API = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
+const calendarEventsUrl = (calendarId: string) =>
+  `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 function requireCredentials(): { clientId: string; clientSecret: string } {
@@ -306,19 +308,53 @@ export interface CalendarEvent {
   summary: string;
   start: string; // ISO, whatever Google returns (dateTime or date-only for all-day)
   end: string;
+  calendar: string; // which calendar this came from, e.g. "primary" or a calendar's own name
 }
 
 interface GoogleEventsResponse {
   items?: { summary?: string; start?: { dateTime?: string; date?: string }; end?: { dateTime?: string; date?: string } }[];
 }
 
-export async function listEvents(withinDays: number): Promise<CalendarEvent[]> {
-  const token = await getAccessToken();
-  const now = new Date();
-  const until = new Date(now.getTime() + withinDays * 24 * 60 * 60 * 1000);
-  const url = new URL(CALENDAR_API);
-  url.searchParams.set("timeMin", now.toISOString());
-  url.searchParams.set("timeMax", until.toISOString());
+interface CalendarListEntry {
+  id: string;
+  summary?: string;
+  selected?: boolean;
+  accessRole?: string;
+  primary?: boolean;
+}
+
+/**
+ * Every calendar the account can see events on — not just the account's
+ * own default calendar. `calendars/primary/events` (the single endpoint
+ * this used to call) only covers that one default calendar; it misses any
+ * calendar the user created themselves or was given access to, which
+ * Google's own apps merge in visually. Filtered to entries the user
+ * hasn't explicitly hidden (`selected !== false`, matching what they'd
+ * see in their own Calendar UI) and that can actually return event
+ * details (`accessRole !== "freeBusyReader"`, which only ever returns
+ * busy/free blocks and would just 403 on an events fetch). The account's
+ * own calendar is one of these entries already (flagged `primary: true`),
+ * so it needs no special-casing.
+ */
+async function listCalendars(token: string): Promise<CalendarListEntry[]> {
+  const response = await fetch(CALENDAR_LIST_API, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new ToolError(`couldn't list calendars (HTTP ${response.status})`);
+  const data = (await response.json()) as { items?: CalendarListEntry[] };
+  return (data.items ?? []).filter((cal) => cal.selected !== false && cal.accessRole !== "freeBusyReader");
+}
+
+async function listEventsForCalendar(
+  token: string,
+  cal: CalendarListEntry,
+  timeMin: string,
+  timeMax: string,
+): Promise<CalendarEvent[]> {
+  const url = new URL(calendarEventsUrl(cal.id));
+  url.searchParams.set("timeMin", timeMin);
+  url.searchParams.set("timeMax", timeMax);
   url.searchParams.set("singleEvents", "true");
   url.searchParams.set("orderBy", "startTime");
   url.searchParams.set("maxResults", "20");
@@ -327,14 +363,38 @@ export async function listEvents(withinDays: number): Promise<CalendarEvent[]> {
     headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new ToolError(`couldn't read the calendar (HTTP ${response.status})`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const data = (await response.json()) as GoogleEventsResponse;
+  const calendarName = cal.summary ?? cal.id;
 
   return (data.items ?? []).map((item) => ({
     summary: item.summary ?? "(no title)",
     start: item.start?.dateTime ?? item.start?.date ?? "",
     end: item.end?.dateTime ?? item.end?.date ?? "",
+    calendar: calendarName,
   }));
+}
+
+export async function listEvents(withinDays: number): Promise<CalendarEvent[]> {
+  const token = await getAccessToken();
+  const now = new Date();
+  const until = new Date(now.getTime() + withinDays * 24 * 60 * 60 * 1000);
+  const timeMin = now.toISOString();
+  const timeMax = until.toISOString();
+
+  const calendars = await listCalendars(token);
+  // One calendar failing to fetch doesn't sink the rest — same "contained
+  // per-source failure" pattern as check_all_inboxes in tools.ts.
+  const perCalendar = await Promise.all(
+    calendars.map((cal) =>
+      listEventsForCalendar(token, cal, timeMin, timeMax).catch(() => [] as CalendarEvent[]),
+    ),
+  );
+
+  return perCalendar
+    .flat()
+    .sort((a, b) => a.start.localeCompare(b.start))
+    .slice(0, 20);
 }
 
 export async function createEvent(
@@ -343,7 +403,7 @@ export async function createEvent(
   endIso: string,
 ): Promise<CalendarEvent> {
   const token = await getAccessToken();
-  const response = await fetch(CALENDAR_API, {
+  const response = await fetch(calendarEventsUrl("primary"), {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -363,6 +423,7 @@ export async function createEvent(
     summary: item.summary ?? summary,
     start: item.start?.dateTime ?? startIso,
     end: item.end?.dateTime ?? endIso,
+    calendar: "primary",
   };
 }
 
