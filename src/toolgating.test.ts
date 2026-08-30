@@ -45,6 +45,7 @@ test("buildTools: drops every unconfigured integration's tools", () => {
     TUYA_UID: "", ROBOROCK_USER_DATA: "", TELEGRAM_API_ID: "", TELEGRAM_API_HASH: "",
     TELEGRAM_SESSION: "", GOOGLE_CLIENT_ID: "", GOOGLE_CLIENT_SECRET: "", HOTMAIL_CLIENT_ID: "",
     PRIVATEMAIL_EMAIL: "", PRIVATEMAIL_PASSWORD: "", TRAFIKLAB_API_KEY: "", TAVILY_API_KEY: "",
+    GMAIL_CLIENT_ID: "", GMAIL_CLIENT_SECRET: "", GMAIL_REFRESH_TOKEN: "",
   });
   for (const gated of GATED) {
     assert.ok(!names.includes(gated), `${gated} should be dropped when unconfigured`);
@@ -72,4 +73,35 @@ test("buildTools: a configured integration's tools come back", () => {
 test("buildTools: gating is deterministic — identical output across calls (cache prefix stability)", () => {
   const env = { CANVAS_BASE_URL: "https://x.instructure.com", CANVAS_API_TOKEN: "tok" };
   assert.deepEqual(toolNamesWith(env), toolNamesWith(env));
+});
+
+/**
+ * Gmail is the one email provider whose credentials are unrelated to its
+ * sibling connection: it rides its own OAuth client, not the Calendar
+ * device flow. So configuring *only* Gmail has to be enough to bring the
+ * email tools back — before Gmail worked, the gate deliberately ignored it,
+ * and forgetting to revisit that would leave the tools invisible no matter
+ * how correctly the user set the login up.
+ */
+test("buildTools: Gmail alone unlocks the email tools, without any other provider", () => {
+  const names = toolNamesWith({
+    GMAIL_CLIENT_ID: "gid", GMAIL_CLIENT_SECRET: "gsecret", GMAIL_REFRESH_TOKEN: "grefresh",
+    HOTMAIL_CLIENT_ID: "", PRIVATEMAIL_EMAIL: "", PRIVATEMAIL_PASSWORD: "",
+    TELEGRAM_API_ID: "", TELEGRAM_API_HASH: "", TELEGRAM_SESSION: "",
+  });
+  for (const present of ["list_emails", "get_email", "create_email_draft", "check_all_inboxes"]) {
+    assert.ok(names.includes(present), `${present} should be present with only Gmail configured`);
+  }
+  // Gmail is not a calendar connection — it must not drag Calendar's tools in.
+  assert.ok(!names.includes("connect_google"), "Gmail credentials must not imply Calendar");
+  assert.ok(!names.includes("connect_hotmail"));
+});
+
+test("buildTools: partial Gmail credentials are treated as not configured", () => {
+  const names = toolNamesWith({
+    GMAIL_CLIENT_ID: "gid", GMAIL_CLIENT_SECRET: "gsecret", GMAIL_REFRESH_TOKEN: "",
+    HOTMAIL_CLIENT_ID: "", PRIVATEMAIL_EMAIL: "", PRIVATEMAIL_PASSWORD: "",
+    TELEGRAM_API_ID: "", TELEGRAM_API_HASH: "", TELEGRAM_SESSION: "",
+  });
+  assert.ok(!names.includes("list_emails"), "a missing refresh token means Gmail cannot work");
 });

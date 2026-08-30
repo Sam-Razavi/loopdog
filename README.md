@@ -445,11 +445,51 @@ Gmail; that turned out to be wrong. Google's device flow flatly rejects Gmail
 scopes with `invalid_scope`, confirmed against a real connect attempt and
 matching [a long-standing public report](https://github.com/googleapis/oauth2client/issues/88)
 hitting the identical error — not a consent-screen setting, a genuine
-platform limitation. Gmail would need the standard redirect-based OAuth flow
-instead, which needs a public callback URL Loopdog doesn't have; tracked
-separately as [issue #13](https://github.com/Sam-Razavi/loopdog/issues/13)
-rather than blocking Calendar on it. `list_emails`/`get_email`/
-`create_email_draft` report Gmail as unavailable if asked for by name.
+platform limitation. Gmail works, but on its own separate OAuth client and
+its own one-time login — see the next section.
+
+### Gmail
+
+A separate setup from Calendar above, for a reason worth understanding: the
+device flow that makes "connect my Google account" work from your phone
+**cannot** carry Gmail scopes. Gmail needs the ordinary redirect-based OAuth
+flow, and a redirect needs somewhere to land — which Loopdog, being a Discord
+bot with no web server, doesn't have. So the redirect lands on **your own
+machine** instead, for the thirty seconds the login takes: `npm run
+gmail-login` starts a throwaway server on `127.0.0.1`, sends you to Google in
+a browser, catches the redirect, and prints a refresh token. Same shape as
+`telegram-login` and `roborock-login` — a one-time terminal step producing a
+credential you paste into Railway.
+
+Once set up, `list_emails`, `get_email`, and `create_email_draft` work with
+Gmail, and `check_all_inboxes` includes it. As with every other provider here
+there is **no send tool** — Loopdog composes drafts, you review and send.
+
+**Setup**, in [Google Cloud Console](https://console.cloud.google.com/) (same
+project as Calendar is fine):
+
+1. **APIs & Services → Library** → enable the **Gmail API**.
+2. **Data Access** → add both `.../auth/gmail.readonly` and
+   `.../auth/gmail.compose`.
+3. **APIs & Services → Credentials → Create Credentials → OAuth client ID** →
+   application type **Desktop app**. This is a *second* client, separate from
+   the "TVs and Limited Input devices" one Calendar uses — a device-flow
+   client can't do loopback redirects, so it can't be reused here. No redirect
+   URI to configure: Desktop clients accept `http://127.0.0.1` on any port.
+4. **⚠️ OAuth consent screen → Publish app.** Don't skip this. While the
+   status is "Testing", Google expires every refresh token after **7 days** —
+   Gmail would need re-authorizing weekly, **and your existing Calendar
+   connection would silently stop working on the same clock**. Publishing
+   fixes both. The app stays *unverified*, which is fine for personal use
+   (under 100 users): you click through one "Google hasn't verified this app"
+   warning during login and never see it again.
+5. Run `npm run gmail-login` locally. It prints all three values — copy
+   `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN` into
+   Railway's Variables tab (or `.env` locally).
+
+All three are optional at boot — leave them unset and Gmail simply isn't
+offered, with the email tools falling back to whichever other provider is
+configured.
 
 ### Hotmail / Outlook
 
@@ -1001,8 +1041,11 @@ transcript up top happened — no Discord app was open for any of it.
 | `LOOPDOG_QUIET_HOURS_END` | `7` | Local hour quiet hours end and held-back reminders push |
 | `LOOPDOG_CITY` | `Stockholm` | Default city for weather lookups |
 | `LOOPDOG_WATCH_INTERVAL_MINUTES` | `60` | How often each watched page gets re-checked |
-| `GOOGLE_CLIENT_ID` | — | Optional. Enables Google Calendar + Gmail — see its section above |
+| `GOOGLE_CLIENT_ID` | — | Optional. Enables Google Calendar — see its section above. Calendar only; Gmail uses the separate client below |
 | `GOOGLE_CLIENT_SECRET` | — | Optional, paired with `GOOGLE_CLIENT_ID` |
+| `GMAIL_CLIENT_ID` | — | Optional. Enables Gmail — see its section above. A **separate** "Desktop app" OAuth client, not the Calendar one |
+| `GMAIL_CLIENT_SECRET` | — | Optional, paired with `GMAIL_CLIENT_ID` |
+| `GMAIL_REFRESH_TOKEN` | — | Optional, from `npm run gmail-login`. All three are needed before Gmail is offered |
 | `HOTMAIL_CLIENT_ID` | — | Optional. Enables Hotmail/Outlook email — see its section above. No paired secret needed |
 | `PRIVATEMAIL_EMAIL` | — | Optional. Enables PrivateMail (Namecheap, IMAP) — see its section above |
 | `PRIVATEMAIL_PASSWORD` | — | Optional, paired with `PRIVATEMAIL_EMAIL`. The actual mailbox password — no OAuth for this provider |

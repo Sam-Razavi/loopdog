@@ -22,9 +22,20 @@ export interface Config {
   quietHoursEnd: number;
   city: string;
   watchIntervalMinutes: number;
-  /** Optional — Google Calendar stays unavailable (a plain ToolError on use) until both are set. Calendar only, not Gmail — Google's device flow doesn't support Gmail scopes; see issue #13. */
+  /** Optional — Google Calendar stays unavailable (a plain ToolError on use) until both are set. Calendar only, not Gmail — Google's device flow doesn't support Gmail scopes, so Gmail has its own separate client below. */
   googleClientId: string;
   googleClientSecret: string;
+  /**
+   * Optional — Gmail stays unavailable (a plain ToolError on use) until all three are set.
+   * A *separate* OAuth client from GOOGLE_CLIENT_ID above, and necessarily so: that one is a
+   * "TVs and Limited Input devices" client for the device flow, which Google refuses to issue
+   * Gmail scopes to at all. These are a "Desktop app" client, which can do the loopback-redirect
+   * flow Gmail needs. GMAIL_REFRESH_TOKEN comes from the one-time `npm run gmail-login` script,
+   * not a Discord flow — same shape as TELEGRAM_SESSION and ROBOROCK_USER_DATA.
+   */
+  gmailClientId: string;
+  gmailClientSecret: string;
+  gmailRefreshToken: string;
   /** Optional — Hotmail/Outlook stays unavailable (a plain ToolError on use) until set. No secret: the device flow's public-client token exchange never sends one. */
   hotmailClientId: string;
   /** Optional — PrivateMail (Namecheap, IMAP) stays unavailable until both are set. No OAuth for this provider: this is the actual mailbox password. */
@@ -200,6 +211,9 @@ export const config: Config = {
   watchIntervalMinutes: watchIntervalMinutes(),
   googleClientId: optional("GOOGLE_CLIENT_ID", ""),
   googleClientSecret: optional("GOOGLE_CLIENT_SECRET", ""),
+  gmailClientId: optional("GMAIL_CLIENT_ID", ""),
+  gmailClientSecret: optional("GMAIL_CLIENT_SECRET", ""),
+  gmailRefreshToken: optional("GMAIL_REFRESH_TOKEN", ""),
   hotmailClientId: optional("HOTMAIL_CLIENT_ID", ""),
   privatemailEmail: optional("PRIVATEMAIL_EMAIL", ""),
   privatemailPassword: optional("PRIVATEMAIL_PASSWORD", ""),

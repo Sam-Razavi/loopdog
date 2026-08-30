@@ -12,16 +12,23 @@ import { buildRfc822Message } from "./email";
  * no public HTTP surface) far better than the standard authorization-code
  * flow would.
  *
- * Calendar only, not Gmail — this file originally requested Gmail scopes
- * too, on the assumption "one device-flow connection covers both products."
- * That assumption was wrong: Google's device flow flatly rejects Gmail
- * scopes with invalid_scope, confirmed against a real connect attempt and
- * matching a long-standing report elsewhere (googleapis/oauth2client#88) —
- * not a consent-screen misconfiguration, a genuine platform limitation.
- * Gmail access would need the standard redirect-based OAuth flow instead,
- * which needs a public callback URL Loopdog doesn't have; tracked as a
- * separate follow-up (see isGmailUsable() below and issue #13) rather
- * than blocking Calendar on it.
+ * The device flow covers Calendar only, not Gmail — this file originally
+ * requested Gmail scopes too, on the assumption "one device-flow
+ * connection covers both products." That assumption was wrong: Google's
+ * device flow flatly rejects Gmail scopes with invalid_scope, confirmed
+ * against a real connect attempt and matching a long-standing report
+ * elsewhere (googleapis/oauth2client#88) — not a consent-screen
+ * misconfiguration, a genuine platform limitation.
+ *
+ * Gmail therefore lives on its own credentials in this same file, further
+ * down: a *separate* "Desktop app" OAuth client, authorized once through
+ * the redirect-based flow by `npm run gmail-login` (see gmail-login.ts),
+ * which hands back a refresh token that lives in GMAIL_REFRESH_TOKEN.
+ * Two clients, two connection stories, one file — because they're both
+ * Google and the Gmail request/parse code was already written here. The
+ * two never share a token: getAccessToken() below serves Calendar from
+ * the device-flow row in SQLite, getGmailAccessToken() serves Gmail from
+ * the env-var refresh token.
  *
  * Second scope surprise, same shape as the Gmail one: `calendar.events`
  * (the narrow "read/write events only" scope) *also* gets invalid_scope
@@ -80,20 +87,21 @@ export function isConnected(): boolean {
 }
 
 /**
- * Always false, deliberately — Gmail scopes can't be carried by this
- * connection's OAuth device flow at all (see this file's top comment and
- * issue #13), so a connected Calendar session never implies Gmail is
- * usable the way it originally did. Kept as a named function rather than
- * inlining `false` at each call site so the reason is documented in one
- * place and this flips cleanly if #13 ever ships.
+ * Whether Gmail can actually be used right now. Deliberately independent of
+ * isConnected() above: Gmail rides its own OAuth client and its own refresh
+ * token, so a connected Calendar says nothing about Gmail and vice versa.
+ * "Usable" here means configured — there's no runtime connect step to be
+ * pending on, since the one-time login happens in `npm run gmail-login`.
  */
 export function isGmailUsable(): boolean {
-  return false;
+  return Boolean(config.gmailClientId && config.gmailClientSecret && config.gmailRefreshToken);
 }
 
 function requireGmailUsable(): void {
+  if (isGmailUsable()) return;
   throw new ToolError(
-    "Gmail isn't available via the Google connection yet — Google's device-flow login doesn't support Gmail scopes. See issue #13.",
+    "Gmail isn't set up yet — it needs its own OAuth client, separate from the calendar one. " +
+      "Run `npm run gmail-login` once and set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET and GMAIL_REFRESH_TOKEN.",
   );
 }
 
@@ -430,6 +438,55 @@ export async function createEvent(
 // --- Gmail (read + draft only — see the top-of-file note on why there is
 // deliberately no send function here) ---------------------------------
 
+/**
+ * Gmail's access token, cached in memory until it expires. Nothing is
+ * persisted: the long-lived credential is GMAIL_REFRESH_TOKEN in the
+ * environment, and an access token is cheap to re-mint from it, so a
+ * process restart just re-mints rather than needing a DB row. Same
+ * module-level cache shape as tuya.ts's token.
+ *
+ * Note this never touches google_auth — that table is Calendar's
+ * device-flow connection, on a different OAuth client entirely.
+ */
+let gmailToken: { value: string; expiresAt: number } | null = null;
+
+/** Exported only so tests can reset the module-level cache between cases. */
+export function _resetGmailTokenCacheForTests(): void {
+  gmailToken = null;
+}
+
+async function getGmailAccessToken(): Promise<string> {
+  requireGmailUsable();
+  // 60s of slack so a token that's about to lapse mid-request gets renewed
+  // now rather than 401-ing halfway through a multi-message list call.
+  if (gmailToken && gmailToken.expiresAt > Date.now() + 60_000) return gmailToken.value;
+
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: config.gmailClientId,
+      client_secret: config.gmailClientSecret,
+      refresh_token: config.gmailRefreshToken,
+      grant_type: "refresh_token",
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const data = (await response.json()) as TokenResponse;
+  if (!response.ok || !data.access_token) {
+    throw new ToolError(
+      "Gmail's saved login is no longer valid — re-run `npm run gmail-login` and update " +
+        "GMAIL_REFRESH_TOKEN. (Google expires these after 7 days while the OAuth consent " +
+        'screen is still in "Testing" — publishing the app stops that.)',
+    );
+  }
+  gmailToken = {
+    value: data.access_token,
+    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+  };
+  return data.access_token;
+}
+
 export interface EmailSummary {
   id: string;
   threadId: string;
@@ -483,8 +540,7 @@ function extractPlainText(part: GmailPart | undefined): string | null {
  * message; fine at the maxResults this is ever called with for one person.
  */
 export async function listEmails(query: string | undefined, maxResults: number): Promise<EmailSummary[]> {
-  requireGmailUsable();
-  const token = await getAccessToken();
+  const token = await getGmailAccessToken();
   const listUrl = new URL(`${GMAIL_API}/messages`);
   listUrl.searchParams.set("q", query && query.trim() ? query.trim() : "in:inbox");
   listUrl.searchParams.set("maxResults", String(maxResults));
@@ -520,8 +576,7 @@ export async function listEmails(query: string | undefined, maxResults: number):
 }
 
 export async function getEmail(id: string): Promise<EmailSummary & { body: string }> {
-  requireGmailUsable();
-  const token = await getAccessToken();
+  const token = await getGmailAccessToken();
   const url = new URL(`${GMAIL_API}/messages/${id}`);
   url.searchParams.set("format", "full");
   const response = await fetch(url, {
@@ -548,8 +603,7 @@ export interface DraftResult {
 
 /** Creates a Gmail draft. Never sends — there is no send function in this file, deliberately. */
 export async function createDraft(to: string, subject: string, body: string): Promise<DraftResult> {
-  requireGmailUsable();
-  const token = await getAccessToken();
+  const token = await getGmailAccessToken();
   const raw = Buffer.from(buildRfc822Message(to, subject, body), "utf-8")
     .toString("base64")
     .replace(/\+/g, "-")

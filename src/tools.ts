@@ -694,9 +694,10 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
       "Connect the user's Google account for Calendar access. Does NOT " +
       "cover Gmail — Google's device flow can't carry Gmail scopes, so " +
       "this connection is Calendar-only regardless of what the user asks " +
-      "for; if they want Gmail, say it isn't available yet (tracked, not " +
-      "fixable by retrying — see connect_hotmail for a working email " +
-      "option). Call this when the user asks to connect, set up, or link " +
+      "for. Gmail is set up separately and outside chat (its own OAuth " +
+      "client plus a one-time `npm run gmail-login` at a terminal), so if " +
+      "the user asks to connect Gmail, say that rather than calling this — " +
+      "this tool cannot grant it. Call this when the user asks to connect, set up, or link " +
       "their calendar, or asks 'did it connect?' / 'is it connected?' " +
       "after starting the process. Re-invokable and idempotent: if a " +
       "connection attempt is already in progress, this checks it instead of " +
@@ -1296,8 +1297,9 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
  */
 function unavailableIntegrations(): { label: string; tools: string[] }[] {
   const anyEmail =
-    // Gmail is deliberately excluded — Google's device flow can't carry Gmail
-    // scopes, so a connected Google account still isn't a usable mailbox (#13).
+    // Gmail counts off its own credentials, not the Calendar connection's —
+    // it rides a separate OAuth client (see google.ts's top comment).
+    Boolean(config.gmailClientId && config.gmailClientSecret && config.gmailRefreshToken) ||
     Boolean(config.hotmailClientId) ||
     Boolean(config.privatemailEmail && config.privatemailPassword);
   const telegram = Boolean(
@@ -1531,7 +1533,7 @@ function resolveEmailProvider(input: Record<string, unknown>): EmailProvider {
   if (usable.length === 1) return usable[0]!;
   if (usable.length === 0) {
     throw new ToolError(
-      `no email account usable yet — call connect_google, call connect_hotmail, or set up PrivateMail's env vars, or ask the user which they want.`,
+      `no email account usable yet — call connect_hotmail, or set up Gmail (a one-time \`npm run gmail-login\` at a terminal) or PrivateMail's env vars. connect_google does NOT grant email — it's calendar-only.`,
     );
   }
   throw new ToolError(`more than one email account is usable (${usable.join(", ")}) — call again with "provider" set to whichever the user means.`);
@@ -1881,7 +1883,7 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
       const usableSources = sources.filter((s) => s.usable);
       if (usableSources.length === 0) {
         throw new ToolError(
-          "no inbox is usable yet — call connect_google, call connect_hotmail, set up PrivateMail's env vars, or set up Telegram, or ask the user which they want.",
+          "no inbox is usable yet — call connect_hotmail, or set up Gmail (a one-time `npm run gmail-login` at a terminal), PrivateMail, or Telegram. connect_google does NOT grant email — it's calendar-only.",
         );
       }
 
