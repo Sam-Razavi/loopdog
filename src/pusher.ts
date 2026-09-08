@@ -32,7 +32,13 @@ import {
   type NudgeKind,
 } from "./db/importantdates";
 import { getAssignments, type CanvasAssignment } from "./canvas";
+import {
+  hasNudgedForAssignment,
+  markNudgedForAssignment,
+  type CanvasNudgeKind,
+} from "./db/canvasnudges";
 import { listSwedishHolidays, type SwedishHoliday } from "./swedishholidays";
+import { anyInboxUsable, gatherAllInboxes } from "./inboxes";
 
 /**
  * Composed server-side, deliberately, not through Claude — same reasoning as
@@ -74,8 +80,8 @@ async function checkAndPush(client: Client): Promise<void> {
   // the same retry-on-next-tick behavior already used for a failed send.
   if (inQuietHours()) return;
 
-  // 'calendar'-kind reminders are handled separately by
-  // checkCalendarReminders below — same underlying overdue query, split by
+  // Scheduled-check kinds are handled separately by
+  // checkScheduledChecks below — same underlying overdue query, split by
   // kind so a scheduled calendar check doesn't also get pushed here as its
   // own (unused) placeholder text.
   const overdue = listUnnotifiedOverdue().filter((r) => r.kind === "text");
@@ -106,43 +112,84 @@ export function formatCalendarCheckMessage(label: string, events: googleCalendar
 }
 
 /**
- * The 'calendar'-kind half of the reminders table: at push time, fetch
- * live events instead of firing the reminder's own text — for "check my
- * calendar every morning at 8 and tell me what's on it" rather than a
- * fixed-wording reminder. Reuses the exact due-time/recurrence machinery
+ * Fetches whatever a scheduled check is a check *of*. Returns the message
+ * to send, or null when the underlying integration isn't set up — the
+ * caller turns that into a one-off "it isn't connected" note rather than a
+ * silent nothing. Throwing means a transient failure worth retrying.
+ */
+async function fetchScheduledCheck(reminder: ReminderView): Promise<string | null> {
+  switch (reminder.kind) {
+    case "calendar":
+      if (!googleCalendar.isConnected()) return null;
+      // Same "today" window as the morning brief — one consistent default
+      // rather than a second configurable window just for this.
+      return formatCalendarCheckMessage(reminder.text, await googleCalendar.listEvents(1));
+    case "inbox": {
+      if (!anyInboxUsable()) return null;
+      const { bySource } = await gatherAllInboxes(5);
+      return formatInboxCheckMessage(reminder.text, bySource);
+    }
+    case "canvas": {
+      if (!config.canvasBaseUrl || !config.canvasApiToken) return null;
+      return formatCanvasCheckMessage(reminder.text, await getAssignments(7));
+    }
+    default:
+      // 'text' never reaches here — checkAndPush handles it. Listed so a
+      // future kind can't be added without the compiler pointing here.
+      throw new Error(`fetchScheduledCheck called with kind "${reminder.kind}"`);
+  }
+}
+
+/** Same composition philosophy as the other formatters — deterministic, no LLM call. */
+export function formatInboxCheckMessage(label: string, bySource: Record<string, unknown>): string {
+  const counts = Object.entries(bySource).map(([source, value]) => {
+    if (value && typeof value === "object" && "error" in value) return `  - ${source}: couldn't check`;
+    const n = Array.isArray(value) ? value.length : 0;
+    return `  - ${source}: ${n} recent`;
+  });
+  return counts.length ? [`${label}:`, ...counts].join("\n") : `${label}: nothing to check.`;
+}
+
+/** Same composition philosophy as the other formatters — deterministic, no LLM call. */
+export function formatCanvasCheckMessage(label: string, assignments: CanvasAssignment[]): string {
+  if (assignments.length === 0) return `${label}: nothing due on Canvas this week.`;
+  return [
+    `${label}:`,
+    ...assignments.map((a) => `  - ${a.name} (${a.course}, due ${a.dueAt.slice(0, 10)})`),
+  ].join("\n");
+}
+
+/**
+ * The scheduled-check half of the reminders table: at push time these fetch
+ * something live instead of firing the reminder's own text — "check my
+ * calendar every morning at 8", "check my email every morning", "check
+ * Canvas every Sunday". Reuses the exact due-time/recurrence machinery
  * reminders already have (one-shot or daily/weekly), so list/complete/
  * delete/update all work on one of these the same way they work on any
  * other reminder, for free.
  *
- * Same "today" window as the morning brief (listEvents(1)) — simplest
- * consistent default rather than a second configurable window just for
- * this.
- *
- * Not connected is treated as a real (if unwelcome) outcome, not a
+ * Not configured is treated as a real (if unwelcome) outcome, not a
  * transient failure: it fires once, says so, and still advances/marks
  * notified like a successful push, rather than silently retrying forever
- * every tick until the user happens to reconnect. An actual fetch error
- * (network blip, expired token needing a fresh connect_google) is the
- * transient case — that one's skipped and retried next tick, same as
- * every other fetch failure in this file.
+ * every tick until the user happens to set it up. An actual fetch error
+ * (network blip, an expired token) is the transient case — that one's
+ * skipped and retried next tick, same as every other fetch failure here.
  */
-async function checkCalendarReminders(client: Client): Promise<void> {
+async function checkScheduledChecks(client: Client): Promise<void> {
   if (inQuietHours()) return;
 
-  const due = listUnnotifiedOverdue().filter((r) => r.kind === "calendar");
+  const due = listUnnotifiedOverdue().filter((r) => r.kind !== "text");
   if (due.length === 0) return;
 
   for (const reminder of due) {
     let message: string;
-    if (!googleCalendar.isConnected()) {
-      message = `${reminder.text}: Google Calendar isn't connected — ask me to connect_google first.`;
-    } else {
-      try {
-        message = formatCalendarCheckMessage(reminder.text, await googleCalendar.listEvents(1));
-      } catch (error) {
-        console.error(`[pusher] failed to fetch calendar events for reminder ${reminder.id}:`, error);
-        continue; // retried next tick — this one's transient, unlike "not connected" above
-      }
+    try {
+      message =
+        (await fetchScheduledCheck(reminder)) ??
+        `${reminder.text}: ${reminder.kind} isn't set up yet, so there's nothing to check.`;
+    } catch (error) {
+      console.error(`[pusher] failed to fetch ${reminder.kind} for reminder ${reminder.id}:`, error);
+      continue; // retried next tick — transient, unlike "not set up" above
     }
 
     try {
@@ -151,7 +198,7 @@ async function checkCalendarReminders(client: Client): Promise<void> {
       if (reminder.recurrence) advanceRecurrence(reminder.id);
       else markNotified(reminder.id);
     } catch (error) {
-      console.error(`[pusher] failed to send calendar check for reminder ${reminder.id}:`, error);
+      console.error(`[pusher] failed to send scheduled check for reminder ${reminder.id}:`, error);
       // not marked — retried next tick, same semantics as checkAndPush
     }
   }
@@ -303,6 +350,71 @@ async function checkImportantDates(client: Client): Promise<void> {
     }
   } catch (error) {
     console.error("[pusher] failed to send important-date nudge:", error);
+    // not marked — retried next tick, same semantics as every other check
+  }
+}
+
+/** How many days before an assignment is due to send the first heads-up. */
+const CANVAS_ADVANCE_DAYS = 3;
+
+/** Same composition philosophy as the other formatters — deterministic, no LLM call. */
+export function formatCanvasDeadlineNudge(
+  pending: { assignment: Pick<CanvasAssignment, "name" | "course">; kind: CanvasNudgeKind }[],
+): string {
+  if (pending.length === 0) {
+    throw new Error("formatCanvasDeadlineNudge called with nothing to say");
+  }
+  return pending
+    .map(({ assignment, kind }) =>
+      kind === "due_today"
+        ? `Due today on Canvas: ${assignment.name} (${assignment.course}).`
+        : `Due in ${CANVAS_ADVANCE_DAYS} days on Canvas: ${assignment.name} (${assignment.course}).`,
+    )
+    .join("\n");
+}
+
+/**
+ * Turns Canvas from pull-only into something that speaks up. Until now an
+ * assignment deadline was only ever surfaced if the user thought to ask —
+ * which is exactly when they don't need telling.
+ *
+ * Two stages per assignment (CANVAS_ADVANCE_DAYS out, then the due day),
+ * deduped per (assignment, stage) on Canvas's own stable assignment id, so
+ * a deadline is mentioned once per stage rather than every tick until it
+ * passes — the same per-occurrence dedup checkImportantDates uses, and for
+ * the same reason.
+ *
+ * Runs at the morning-brief hour rather than adding a fifth LOOPDOG_*_HOUR:
+ * a deadline heads-up is exactly the kind of thing worth knowing first
+ * thing, which is the reasoning already written into checkImportantDates.
+ * Costs nothing when Canvas isn't configured — canvasAssignmentsOrEmpty
+ * returns [] without making a request.
+ */
+async function checkCanvasDeadlines(client: Client): Promise<void> {
+  if (localHour() < config.morningBriefHour) return;
+
+  const today = localDay();
+  const advanceDay = addDays(today, CANVAS_ADVANCE_DAYS);
+
+  const pending: { assignment: CanvasAssignment; kind: CanvasNudgeKind }[] = [];
+  for (const assignment of await canvasAssignmentsOrEmpty(CANVAS_ADVANCE_DAYS)) {
+    const dueDay = assignment.dueAt.slice(0, 10);
+    const kind: CanvasNudgeKind | null =
+      dueDay === today ? "due_today" : dueDay === advanceDay ? "advance" : null;
+    if (!kind) continue; // due in between — already flagged, or not yet worth a nudge
+    if (hasNudgedForAssignment(assignment.id, kind)) continue;
+    pending.push({ assignment, kind });
+  }
+  if (pending.length === 0) return;
+
+  try {
+    const owner = await client.users.fetch(config.ownerId);
+    await owner.send(formatCanvasDeadlineNudge(pending));
+    for (const { assignment, kind } of pending) {
+      markNudgedForAssignment(assignment.id, kind); // only after the send actually succeeds
+    }
+  } catch (error) {
+    console.error("[pusher] failed to send Canvas deadline nudge:", error);
     // not marked — retried next tick, same semantics as every other check
   }
 }
@@ -667,10 +779,11 @@ async function tick(client: Client): Promise<void> {
   await checkWeatherWarnings(client);
   if (getMuteUntil()) return; // vacation mode: skip every other proactive DM this tick
   await checkAndPush(client);
-  await checkCalendarReminders(client);
+  await checkScheduledChecks(client);
   await checkAtRiskNudge(client);
   await checkElectricityNudge(client);
   await checkImportantDates(client);
+  await checkCanvasDeadlines(client);
   await checkWeeklyDigest(client);
   await checkMorningBrief(client);
   await checkPageWatches(client);

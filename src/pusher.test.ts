@@ -3,6 +3,9 @@ import { test } from "node:test";
 import {
   formatAtRiskNudge,
   formatCalendarCheckMessage,
+  formatCanvasCheckMessage,
+  formatCanvasDeadlineNudge,
+  formatInboxCheckMessage,
   formatDigest,
   formatImportantDateNudge,
   formatMorningBrief,
@@ -289,4 +292,48 @@ test("important-date nudge: multiple pending dates batch into one message, one l
   assert.equal(lines.length, 2);
   assert.equal(lines[0], "Today: Mom's birthday.");
   assert.equal(lines[1], "In 7 days: Dad's birthday.");
+});
+
+test("canvas deadline nudge distinguishes due-today from the advance heads-up", () => {
+  const message = formatCanvasDeadlineNudge([
+    { assignment: { name: "Lab report", course: "Algorithms" }, kind: "due_today" },
+    { assignment: { name: "Essay", course: "Ethics" }, kind: "advance" },
+  ]);
+  const lines = message.split("\n");
+  assert.match(lines[0]!, /^Due today on Canvas: Lab report \(Algorithms\)\.$/);
+  assert.match(lines[1]!, /^Due in 3 days on Canvas: Essay \(Ethics\)\.$/);
+});
+
+test("canvas deadline nudge batches rather than sending one DM per assignment", () => {
+  const message = formatCanvasDeadlineNudge([
+    { assignment: { name: "A", course: "C1" }, kind: "due_today" },
+    { assignment: { name: "B", course: "C2" }, kind: "due_today" },
+  ]);
+  assert.equal(message.split("\n").length, 2);
+});
+
+test("canvas deadline nudge with nothing to say is a programming error", () => {
+  assert.throws(() => formatCanvasDeadlineNudge([]), /nothing to say/);
+});
+
+test("scheduled canvas check lists the week's assignments, or says it's empty", () => {
+  assert.equal(
+    formatCanvasCheckMessage("sunday canvas check", []),
+    "sunday canvas check: nothing due on Canvas this week.",
+  );
+  const message = formatCanvasCheckMessage("sunday canvas check", [assignment({ name: "Lab report" })]);
+  assert.match(message.split("\n")[1]!, /Lab report \(Algorithms, due 2026-08-12\)/);
+});
+
+test("scheduled inbox check counts per source and names ones that failed", () => {
+  const message = formatInboxCheckMessage("morning inbox check", {
+    gmail: [{ id: "1" }, { id: "2" }],
+    hotmail: [],
+    telegram: { error: "not connected" },
+  });
+  const lines = message.split("\n");
+  assert.equal(lines[0], "morning inbox check:");
+  assert.match(lines[1]!, /gmail: 2 recent/);
+  assert.match(lines[2]!, /hotmail: 0 recent/);
+  assert.match(lines[3]!, /telegram: couldn't check/);
 });

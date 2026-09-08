@@ -79,7 +79,7 @@ everything else.
 
 | Tool | What it does |
 |---|---|
-| `create_reminder` | Store a reminder with a due time; optionally recurring (daily/weekly) |
+| `create_reminder` | Store a reminder with a due time; optionally recurring (daily/weekly), or a scheduled check of the calendar/inbox/Canvas |
 | `list_reminders` | Pending, completed, or due before a cutoff |
 | `complete_reminder` | Mark one done |
 | `edit_reminder` | Change a reminder's text or time in place |
@@ -310,6 +310,21 @@ guessed at, since spending might live under "expenses," "groceries," or
 split across several names — Claude checks `list_metrics` first if it's
 not sure which one to use.
 
+### PDFs
+
+Drop a PDF into the chat and ask about it — a course syllabus, an assignment
+brief, an invoice, a letter that needs decoding. Loopdog reads it directly;
+there's no upload step, no OCR service, and no extra dependency, because the
+model takes PDF natively.
+
+Two caveats worth knowing. **Pages cost tokens**: a long document is a genuinely
+more expensive message than a normal one, and the `[usage]` log line shows what
+each one actually cost. And the bytes are never stored in conversation history —
+only a marker with the filename — so a follow-up question hours later may need
+the file again.
+
+Capped at 2 PDFs of 10 MB each per message.
+
 ### Image-aware replies
 
 Attach a photo to a DM — a meal, a workout, a screenshot, anything — and Loopdog
@@ -348,19 +363,34 @@ then quietly rolls its due time forward to the next one — no "complete" step
 required. Completing it the normal way still works and stops the recurrence, for
 when you're actually done with it.
 
-### Scheduled calendar checks
+### Scheduled checks
 
 "Check my calendar every morning at 8 and tell me what's on it" works the same
 way as a recurring reminder — because under the hood it *is* one, just marked
-to pull live events instead of firing fixed wording. At the scheduled time,
-Loopdog fetches the calendar fresh (every calendar the account can see, same
-as `list_calendar_events`, not just the default one) and sends whatever's on
-it that day, instead of repeating what you originally said. One-shot works
-too: "check my calendar at 3pm today." It needs Google Calendar connected —
-see below — but doesn't need it connected *yet*: if it isn't when the check
-comes due, it fires once, says so, and moves on rather than silently never
-firing. Since it's really just a reminder with a different push behavior,
-listing, editing, and deleting it work exactly like any other reminder.
+to pull something live instead of firing fixed wording. Three things can be
+checked on a schedule:
+
+| Say | What arrives at the scheduled time |
+|---|---|
+| "check my calendar every morning at 8" | That day's events, across every calendar the account can see |
+| "check my email every morning" | What's recent in every usable mailbox — Gmail, Hotmail, PrivateMail, Telegram |
+| "check Canvas every Sunday" | The week's upcoming assignments |
+
+One-shot works too: "check my calendar at 3pm today." None of them need the
+underlying integration connected *yet* — if it isn't when the check comes due,
+it fires once, says so, and moves on rather than silently never firing. Since
+each is really just a reminder with a different push behavior, listing,
+editing, and deleting them work exactly like any other reminder.
+
+### Canvas deadline nudges
+
+Separately from the scheduled checks above, Canvas deadlines speak up on their
+own. Three days before an assignment is due, and again on the day, Loopdog
+sends a heads-up — once per stage, not once per background tick. It rides the
+morning-brief hour rather than adding another setting, and does nothing at all
+unless Canvas is configured. This is the difference between a tool that
+answers "what's due?" when you think to ask, and one that tells you before you
+think to ask.
 
 ### Undo and edit
 

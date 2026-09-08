@@ -62,6 +62,17 @@ export interface ImageInput {
   data: string; // base64
 }
 
+/**
+ * A PDF attached to a Discord message. Named "document" rather than
+ * "attachment" on purpose — AgentReply.attachments below is the *outgoing*
+ * direction (charts and backups Loopdog sends back), and one word meaning
+ * both directions in the same file would be a trap.
+ */
+export interface DocumentInput {
+  filename: string;
+  data: string; // base64, no newlines — the API rejects wrapped base64
+}
+
 export interface AgentReply {
   text: string;
   /**
@@ -77,6 +88,56 @@ export interface AgentReply {
 const ATTACHMENT_TOOLS = new Set(["export_backup", "habit_chart", "metric_chart"]);
 
 /**
+ * Builds the user turn's content blocks. Pure and exported so the ordering
+ * is pinned by a test rather than by a comment: document blocks go *before*
+ * the text block (the documented ordering for PDF input), and a plain string
+ * is used when there's nothing attached, which keeps the overwhelmingly
+ * common no-attachment case byte-identical to what it always sent.
+ */
+export function buildUserContent(
+  userText: string,
+  images: ImageInput[],
+  documents: DocumentInput[],
+): Anthropic.MessageParam["content"] {
+  if (!images.length && !documents.length) return userText;
+  return [
+    ...documents.map(
+      (document): Anthropic.DocumentBlockParam => ({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: document.data },
+        title: document.filename,
+      }),
+    ),
+    { type: "text", text: userText },
+    ...images.map(
+      (image): Anthropic.ImageBlockParam => ({
+        type: "image",
+        source: { type: "base64", media_type: image.mediaType, data: image.data },
+      }),
+    ),
+  ];
+}
+
+/**
+ * The one-line note that stands in for attachment bytes in stored history.
+ * Pure and exported so the "bytes never get persisted" property is testable
+ * directly — it's the thing keeping old conversations from growing without
+ * bound, so it's worth pinning rather than trusting.
+ */
+export function attachmentMarker(
+  userText: string,
+  images: ImageInput[],
+  documents: DocumentInput[],
+): string {
+  const parts: string[] = [];
+  if (images.length) parts.push(`${images.length} image${images.length === 1 ? "" : "s"}`);
+  if (documents.length) parts.push(documents.map((d) => d.filename).join(", "));
+  return parts.length ? `${userText} [${parts.join(", ")} attached]` : userText;
+}
+
+let queue: Promise<unknown> = Promise.resolve();
+
+/**
  * Serialises every call, because the Discord handler is fully re-entrant:
  * two messages arriving close together would each read the same
  * recentTurns() and each appendTurn() at the end, landing history as
@@ -87,26 +148,22 @@ const ATTACHMENT_TOOLS = new Set(["export_backup", "habit_chart", "metric_chart"
  * The tail .catch keeps one rejected turn from wedging the chain forever;
  * the rejection still reaches that call's own awaiter.
  */
-let queue: Promise<unknown> = Promise.resolve();
-
-export function respond(userText: string, images: ImageInput[] = []): Promise<AgentReply> {
-  const result = queue.then(() => respondInner(userText, images));
+export function respond(
+  userText: string,
+  images: ImageInput[] = [],
+  documents: DocumentInput[] = [],
+): Promise<AgentReply> {
+  const result = queue.then(() => respondInner(userText, images, documents));
   queue = result.catch(() => undefined);
   return result;
 }
 
-async function respondInner(userText: string, images: ImageInput[] = []): Promise<AgentReply> {
-  const userContent: Anthropic.MessageParam["content"] = images.length
-    ? [
-        { type: "text", text: userText },
-        ...images.map(
-          (image): Anthropic.ImageBlockParam => ({
-            type: "image",
-            source: { type: "base64", media_type: image.mediaType, data: image.data },
-          }),
-        ),
-      ]
-    : userText;
+async function respondInner(
+  userText: string,
+  images: ImageInput[] = [],
+  documents: DocumentInput[] = [],
+): Promise<AgentReply> {
+  const userContent = buildUserContent(userText, images, documents);
 
   const messages: Anthropic.MessageParam[] = [
     ...recentTurns(HISTORY_TURNS).map(
@@ -211,12 +268,12 @@ async function respondInner(userText: string, images: ImageInput[] = []): Promis
 
   if (!reply) reply = "Nothing to say to that, apparently. Try again?";
 
-  // Persist only text — an attached image's bytes never enter history, so a
-  // years-long conversation never re-sends old image data on every future
-  // turn. A short marker keeps the fact that one was shared, for context.
-  const persistedText = images.length
-    ? `${userText} [${images.length} image${images.length === 1 ? "" : "s"} attached]`
-    : userText;
+  // Persist only text — an attached image's or PDF's bytes never enter
+  // history, so a years-long conversation never re-sends old attachment data
+  // on every future turn. A short marker keeps the fact that one was shared,
+  // for context. PDFs name the file: "what did that say?" a few turns later
+  // is answerable from the name, where a bare count wouldn't be.
+  const persistedText = attachmentMarker(userText, images, documents);
   appendTurn("user", persistedText);
   appendTurn("assistant", reply);
   return { text: reply, attachments };

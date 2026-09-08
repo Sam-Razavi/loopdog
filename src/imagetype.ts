@@ -51,3 +51,26 @@ export function sniffImageType(buffer: Buffer): SupportedImageType | null {
   }
   return null;
 }
+
+/**
+ * Detects a PDF from its file signature (`%PDF-`), for exactly the same
+ * reason sniffImageType exists rather than trusting Discord's declared
+ * contentType: a media_type that doesn't match the real bytes is a hard 400
+ * from Anthropic's API, not a soft mismatch.
+ *
+ * Only the signature is checked, deliberately — validating any more of the
+ * structure would mean parsing PDF, and the API is the thing that has to
+ * accept it anyway. A file that starts with %PDF- but is corrupt further in
+ * gets rejected by the API with a real error, which is more useful than a
+ * half-parser here guessing wrong.
+ */
+export function sniffPdf(buffer: Buffer): boolean {
+  return (
+    buffer.length >= 5 &&
+    buffer[0] === 0x25 && // %
+    buffer[1] === 0x50 && // P
+    buffer[2] === 0x44 && // D
+    buffer[3] === 0x46 && // F
+    buffer[4] === 0x2d //   -
+  );
+}

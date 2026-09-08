@@ -11,8 +11,9 @@ CREATE TABLE IF NOT EXISTS reminders (
   completed_at TEXT,                   -- NULL while pending
   notified_at  TEXT,                   -- NULL until the reminder has been pushed
   recurrence   TEXT,                   -- NULL, 'daily', or 'weekly'
-  kind         TEXT                    -- NULL/'text' (push the reminder's own text) or 'calendar'
-                                        -- (push live Google Calendar events instead, see pusher.ts)
+  kind         TEXT                    -- NULL/'text' pushes the reminder's own text; 'calendar',
+                                        -- 'inbox' and 'canvas' instead fetch that thing live at
+                                        -- push time (see pusher.ts's checkScheduledChecks)
 );
 
 CREATE INDEX IF NOT EXISTS idx_reminders_pending
@@ -131,10 +132,10 @@ CREATE TABLE IF NOT EXISTS metric_logs (
 CREATE INDEX IF NOT EXISTS idx_metric_logs_lookup
   ON metric_logs(metric_id, day DESC);
 
--- Google OAuth (Calendar only -- the device flow can't carry Gmail scopes,
--- see issue #13): at most one row, same single-row shape as mute. 'pending'
--- while waiting on the user
--- to approve the device-flow code in a browser; 'connected' once real
+-- Google OAuth (Calendar only -- the device flow can't carry Gmail scopes;
+-- Gmail has its own separate client, see google.ts): at most one row, same
+-- single-row shape as mute. 'pending' while waiting on the user to approve
+-- the device-flow code in a browser; 'connected' once real
 -- tokens are stored. GOOGLE_CLIENT_ID/SECRET are optional env vars — this
 -- table simply stays empty for anyone who never sets them up, no impact on
 -- the rest of the app.
@@ -190,6 +191,19 @@ CREATE TABLE IF NOT EXISTS electricity_nudges (
 CREATE TABLE IF NOT EXISTS smhi_warnings_seen (
   id      TEXT PRIMARY KEY,
   seen_at TEXT NOT NULL
+);
+
+-- One row per Canvas assignment per nudge kind ('advance' a few days out,
+-- 'due_today' on the day), so a deadline is mentioned once per stage rather
+-- than every scheduler tick until it passes. Keyed on Canvas's own stable
+-- assignment id, the same "dedup on the source's id" shape as
+-- smhi_warnings_seen above. Only relevant when Canvas is configured; stays
+-- empty otherwise.
+CREATE TABLE IF NOT EXISTS canvas_assignment_nudges (
+  assignment_id INTEGER NOT NULL,
+  kind          TEXT NOT NULL,          -- 'advance' or 'due_today'
+  nudged_at     TEXT NOT NULL,
+  PRIMARY KEY (assignment_id, kind)
 );
 
 -- Free-text, day-anchored journal entries — distinct from habit_logs

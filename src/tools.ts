@@ -11,6 +11,7 @@ import {
   deleteReminder,
   listReminders,
   updateReminder,
+  SCHEDULED_CHECK_KINDS,
   type Recurrence,
   type ReminderKind,
   type ReminderStatus,
@@ -26,6 +27,7 @@ import { addEntry, deleteEntry, getEntries } from "./db/journal";
 import { renderHabitChart } from "./chart";
 import { renderMetricChart } from "./linechart";
 import { findAssociation } from "./correlations";
+import { gatherAllInboxes } from "./inboxes";
 import * as googleCalendar from "./google";
 import * as hotmail from "./hotmail";
 import * as privatemail from "./privatemail";
@@ -59,10 +61,11 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
       "at a particular time. Resolve relative phrasing like 'tomorrow at 9am' or " +
       "'in two hours' against the current local time given in the system prompt. " +
       "For something that repeats — 'every day', 'every Monday' — set recurrence " +
-      "instead of asking the user to recreate it each time. For 'check my " +
-      "calendar every morning at 8' or similar — the user wants a live calendar " +
-      "pull at a scheduled time, not to be told fixed wording — set kind to " +
-      "'calendar' instead of creating a plain reminder.",
+      "instead of asking the user to recreate it each time. When the user wants " +
+      "something *looked up* at a scheduled time rather than being told fixed " +
+      "wording — 'check my calendar every morning at 8', 'check my email every " +
+      "morning', 'check Canvas every Sunday' — set kind accordingly instead of " +
+      "creating a plain reminder.",
     input_schema: {
       type: "object",
       properties: {
@@ -91,15 +94,17 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
         },
         kind: {
           type: "string",
-          enum: ["text", "calendar"],
+          enum: ["text", "calendar", "inbox", "canvas"],
           description:
             "Omit for a normal reminder (default 'text', pushes the reminder's own " +
-            "wording). Set to 'calendar' for 'check my calendar and tell me what's on " +
-            "it' at a scheduled time — at push time this fetches that day's events " +
-            "live from every calendar the account can see (same as " +
-            "list_calendar_events) and sends those instead of fixed text. Needs " +
-            "Google Calendar connected — if it isn't yet when this fires, it says so " +
-            "once rather than never firing.",
+            "wording). The other kinds are scheduled *checks*: at push time they " +
+            "fetch something live and send that instead of fixed text. 'calendar' " +
+            "sends that day's events across every calendar the account can see; " +
+            "'inbox' sends what's recent in every usable mailbox; 'canvas' sends the " +
+            "week's upcoming assignments. Use one of these for 'check my calendar " +
+            "every morning at 8', 'check my email every morning', 'check Canvas every " +
+            "Sunday'. If the underlying integration isn't set up when one fires, it " +
+            "says so once rather than never firing.",
         },
       },
       required: ["text", "due_at"],
@@ -1452,13 +1457,15 @@ function optionalRecurrence(
   return value;
 }
 
+const REMINDER_KINDS: ReminderKind[] = ["text", ...SCHEDULED_CHECK_KINDS];
+
 function optionalKind(input: Record<string, unknown>, key: string): ReminderKind {
   const value = optionalStr(input, key);
   if (value === undefined) return "text";
-  if (value !== "text" && value !== "calendar") {
-    throw new ToolError(`"${key}" must be "text" or "calendar", got "${value}"`);
+  if (!REMINDER_KINDS.includes(value as ReminderKind)) {
+    throw new ToolError(`"${key}" must be one of ${REMINDER_KINDS.join(", ")}, got "${value}"`);
   }
-  return value;
+  return value as ReminderKind;
 }
 
 function num(input: Record<string, unknown>, key: string): number {
@@ -1872,35 +1879,8 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
     case "check_all_inboxes": {
       const maxPerSource = optionalIntClamped(input, "max_per_source", 5, 1, 15);
-
-      const sources: { name: string; usable: boolean; fetch: () => Promise<unknown> }[] = [
-        { name: "gmail", usable: googleCalendar.isGmailUsable(), fetch: () => googleCalendar.listEmails(undefined, maxPerSource) },
-        { name: "hotmail", usable: hotmail.isConnected(), fetch: () => hotmail.listEmails(undefined, maxPerSource) },
-        { name: "privatemail", usable: privatemail.isConfigured(), fetch: () => privatemail.listEmails(undefined, maxPerSource) },
-        { name: "telegram", usable: telegram.isConfigured(), fetch: () => telegram.listChats(maxPerSource) },
-      ];
-
-      const usableSources = sources.filter((s) => s.usable);
-      if (usableSources.length === 0) {
-        throw new ToolError(
-          "no inbox is usable yet — call connect_hotmail, or set up Gmail (a one-time `npm run gmail-login` at a terminal), PrivateMail, or Telegram. connect_google does NOT grant email — it's calendar-only.",
-        );
-      }
-
-      // Each source's failure is contained to its own entry rather than
-      // sinking the whole call — same spirit as checkPageWatches' per-watch
-      // try/catch — so one dead connection doesn't hide the others.
-      const results = await Promise.all(
-        usableSources.map(async (s): Promise<[string, unknown]> => {
-          try {
-            return [s.name, await s.fetch()];
-          } catch (error) {
-            return [s.name, { error: error instanceof Error ? error.message : String(error) }];
-          }
-        }),
-      );
-
-      return { untrusted: true, max_per_source: maxPerSource, ...Object.fromEntries(results) };
+      const { bySource } = await gatherAllInboxes(maxPerSource);
+      return { untrusted: true, max_per_source: maxPerSource, ...bySource };
     }
 
     case "list_telegram_chats": {

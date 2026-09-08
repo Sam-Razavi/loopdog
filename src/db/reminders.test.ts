@@ -49,6 +49,14 @@ test("kind defaults to 'text' and round-trips 'calendar' through create/list/get
   assert.equal(calendarCheck.kind, "calendar");
   assert.equal(getReminder(calendarCheck.id)?.kind, "calendar");
 
+  // Every scheduled-check kind round-trips the same way — they differ only
+  // in what pusher.ts fetches, never in how this layer stores them.
+  for (const kind of ["inbox", "canvas"] as const) {
+    const check = createReminder(`${kind} check`, overdueIso(), "daily", kind);
+    assert.equal(check.kind, kind);
+    assert.equal(getReminder(check.id)?.kind, kind);
+  }
+
   const overdueKinds = listUnnotifiedOverdue().filter((r) => r.id === plain.id || r.id === calendarCheck.id);
   assert.deepEqual(
     overdueKinds.map((r) => r.kind).sort(),

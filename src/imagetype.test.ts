@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { sniffImageType } from "./imagetype";
+import { sniffImageType, sniffPdf } from "./imagetype";
 import { encodePng } from "./png";
 
 test("sniffs a real PNG by its signature", () => {
@@ -35,4 +35,23 @@ test("returns null for content that isn't a recognized image format", () => {
 test("doesn't false-positive on a buffer too short to hold a real header", () => {
   assert.equal(sniffImageType(Buffer.from([0x89, 0x50])), null); // truncated PNG signature
   assert.equal(sniffImageType(Buffer.from([0x52, 0x49, 0x46, 0x46])), null); // RIFF with no WEBP tag yet
+});
+
+test("sniffs a real PDF by its %PDF- signature", () => {
+  const pdf = Buffer.from("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n1 0 obj", "binary");
+  assert.equal(sniffPdf(pdf), true);
+});
+
+test("does not mistake an image, text, or a truncated buffer for a PDF", () => {
+  assert.equal(sniffPdf(encodePng(1, 1, Buffer.alloc(4))), false);
+  assert.equal(sniffPdf(Buffer.from([0xff, 0xd8, 0xff, 0xe0])), false);
+  assert.equal(sniffPdf(Buffer.from("PDF-1.7")), false, "must require the leading %");
+  assert.equal(sniffPdf(Buffer.from("%PDF")), false, "4 bytes is short of the signature");
+  assert.equal(sniffPdf(Buffer.alloc(0)), false);
+});
+
+test("a PDF is not also sniffed as an image, and vice versa", () => {
+  const pdf = Buffer.from("%PDF-1.4\n");
+  assert.equal(sniffImageType(pdf), null, "a PDF must not be sent as an image block");
+  assert.equal(sniffPdf(encodePng(1, 1, Buffer.alloc(4))), false);
 });

@@ -5,13 +5,17 @@ export type Recurrence = "daily" | "weekly";
 
 /**
  * 'text' (the default) pushes the reminder's own wording, same as always.
- * 'calendar' pushes live Google Calendar events instead — see
- * pusher.ts's checkCalendarReminders, which is the only thing that treats
- * this differently from a plain reminder; everything else in this file
- * (listing, completing, editing, recurrence) doesn't care which kind a row
- * is.
+ * Every other kind pushes something fetched live at push time instead —
+ * 'calendar' today's events, 'inbox' every usable mailbox, 'canvas' the
+ * week's assignments. Only pusher.ts's checkScheduledChecks treats these
+ * differently; everything else in this file (listing, completing, editing,
+ * recurrence) doesn't care which kind a row is, which is the whole reason
+ * scheduled checks are a column here rather than a separate feature.
  */
-export type ReminderKind = "text" | "calendar";
+export type ReminderKind = "text" | "calendar" | "inbox" | "canvas";
+
+/** The kinds that fetch something live, i.e. everything except a plain reminder. */
+export const SCHEDULED_CHECK_KINDS = ["calendar", "inbox", "canvas"] as const;
 
 export interface ReminderRow {
   id: number;

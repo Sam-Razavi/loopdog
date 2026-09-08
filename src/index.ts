@@ -8,15 +8,24 @@ import {
   type Message,
 } from "discord.js";
 import { assertDiscordConfigured, config } from "./config";
-import { respond, type ImageInput } from "./agent";
+import { respond, type DocumentInput, type ImageInput } from "./agent";
 import { migrate } from "./db";
-import { sniffImageType } from "./imagetype";
+import { sniffImageType, sniffPdf } from "./imagetype";
 import { startScheduler } from "./pusher";
 import { sweepOldTempFiles } from "./tmpfiles";
 
 const DISCORD_LIMIT = 2000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_IMAGES = 4;
+/**
+ * PDFs get their own, larger cap: base64 inflates by ~33%, so 10 MB encodes
+ * to ~13 MB and stays comfortably inside the API's 32 MB request limit even
+ * with two of them plus images. Pages cost tokens, so this is the guard
+ * against a 300-page document quietly becoming an expensive message — the
+ * [usage] log line then shows what one actually cost.
+ */
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
+const MAX_PDFS = 2;
 
 /**
  * Downloads any image attachments on a message and base64-encodes them for
@@ -30,24 +39,38 @@ const MAX_IMAGES = 4;
  * metadata and actual bytes disagreed), and Anthropic's API hard-rejects a
  * media_type that doesn't match the real content.
  */
-async function extractImages(message: Message): Promise<ImageInput[]> {
+async function extractAttachments(
+  message: Message,
+): Promise<{ images: ImageInput[]; documents: DocumentInput[] }> {
   const images: ImageInput[] = [];
+  const documents: DocumentInput[] = [];
+
   for (const attachment of message.attachments.values()) {
-    if (images.length >= MAX_IMAGES) break;
-    if (!attachment.contentType?.startsWith("image/")) continue; // cheap pre-filter only
-    if (attachment.size > MAX_IMAGE_BYTES) continue;
+    const isImage = attachment.contentType?.startsWith("image/") ?? false;
+    const isPdf = attachment.contentType?.startsWith("application/pdf") ?? false;
+    if (!isImage && !isPdf) continue; // cheap pre-filter only — bytes decide below
+    if (isImage && (images.length >= MAX_IMAGES || attachment.size > MAX_IMAGE_BYTES)) continue;
+    if (isPdf && (documents.length >= MAX_PDFS || attachment.size > MAX_PDF_BYTES)) continue;
+
     try {
       const response = await fetch(attachment.url);
       if (!response.ok) continue;
       const buffer = Buffer.from(await response.arrayBuffer());
+
+      if (sniffPdf(buffer)) {
+        // toString("base64") never wraps lines, which matters: the API
+        // rejects base64 containing newlines.
+        documents.push({ filename: attachment.name, data: buffer.toString("base64") });
+        continue;
+      }
       const mediaType = sniffImageType(buffer);
       if (!mediaType) continue; // Claude doesn't accept whatever this actually is
       images.push({ mediaType, data: buffer.toString("base64") });
     } catch (error) {
-      console.error("[loopdog] failed to fetch image attachment:", error);
+      console.error("[loopdog] failed to fetch attachment:", error);
     }
   }
-  return images;
+  return { images, documents };
 }
 
 /** Discord hard-caps messages at 2000 characters; split on paragraph or line. */
@@ -157,13 +180,13 @@ async function main(): Promise<void> {
     const prompt = extractPrompt(message, botId);
     if (prompt === null) return;
 
-    const images = await extractImages(message);
-    if (!prompt && images.length === 0) return;
+    const { images, documents } = await extractAttachments(message);
+    if (!prompt && images.length === 0 && documents.length === 0) return;
 
     let attachments: string[] = [];
     try {
       if (message.channel.isSendable()) await message.channel.sendTyping();
-      const reply = await respond(prompt || "(no caption)", images);
+      const reply = await respond(prompt || "(no caption)", images, documents);
       attachments = reply.attachments;
       const parts = chunk(reply.text);
       for (let i = 0; i < parts.length; i++) {
