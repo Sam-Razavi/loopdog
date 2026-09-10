@@ -21,6 +21,8 @@ import * as hotmail from "./hotmail";
 import { addDays, dayOfWeek, formatLocal, inQuietHours, localDay, localHour, localInstant } from "./time";
 import { sweepOldTempFilesIfDue } from "./tmpfiles";
 import { getPrices, isCurrentlyCheap } from "./electricity";
+import { getWeather, type WeatherResult } from "./weather";
+import { goalsWithProgress, type GoalWithProgress } from "./goalprogress";
 import { hasElectricityNudgedToday, markElectricityNudged } from "./db/electricity";
 import { getActiveWarnings } from "./smhiwarnings";
 import { hasSeenWarning, markWarningSeen } from "./db/smhiwarnings";
@@ -39,6 +41,14 @@ import {
 } from "./db/canvasnudges";
 import { listSwedishHolidays, type SwedishHoliday } from "./swedishholidays";
 import { anyInboxUsable, gatherAllInboxes } from "./inboxes";
+import {
+  listDueActions,
+  markFired,
+  NOISY_ACTIONS,
+  type ScheduledActionView,
+} from "./db/scheduledactions";
+import { listDevices, resolveDeviceFromList, setDevicePower } from "./tuya";
+import { listVacuums, resolveVacuumFromList, startVacuum } from "./roborock";
 
 /**
  * Composed server-side, deliberately, not through Claude — same reasoning as
@@ -419,6 +429,95 @@ async function checkCanvasDeadlines(client: Client): Promise<void> {
   }
 }
 
+/** Same composition philosophy as the other formatters — deterministic, no LLM call. */
+export function formatActionDone(action: ScheduledActionView, device: string): string {
+  const because = action.reason ? ` (${action.reason})` : "";
+  switch (action.action) {
+    case "plug_on":
+      return `Turned on ${device}${because}.`;
+    case "plug_off":
+      return `Turned off ${device}${because}.`;
+    default:
+      return `Started ${device}${because}.`;
+  }
+}
+
+/**
+ * Fires scheduled physical actions — a plug switching on inside the
+ * cheapest power window, the vacuum running while the flat is empty.
+ *
+ * Quiet hours are applied per action rather than across the board, which is
+ * the whole reason this isn't one blanket check. A plug turning on at 03:00
+ * is silent, and 03:00 is frequently the entire point (that's when power is
+ * cheap) — blocking it would defeat the feature. A vacuum at 03:00 wakes
+ * the household. So noisy actions wait for the window to pass and fire
+ * afterwards; silent ones go when they were told to.
+ *
+ * Muting suppresses both, via the shared gate in tick(): while away on
+ * holiday, an unattended appliance switching itself on is exactly the thing
+ * not to do.
+ */
+async function checkScheduledActions(client: Client): Promise<void> {
+  const due = listDueActions().filter(
+    (action) => !(inQuietHours() && NOISY_ACTIONS.includes(action.action)),
+  );
+  if (due.length === 0) return;
+
+  for (const action of due) {
+    let device: string;
+    try {
+      device = await performAction(action);
+    } catch (error) {
+      // Left unfired so it retries next tick — but tell the user, because
+      // unlike a failed read, an action they scheduled silently not
+      // happening is something they'd want to know about.
+      console.error(`[pusher] scheduled action ${action.id} failed:`, error);
+      try {
+        const owner = await client.users.fetch(config.ownerId);
+        await owner.send(
+          `Couldn't run the scheduled ${action.action.replace("_", " ")}${action.target ? ` for ${action.target}` : ""}: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+        markFired(action.id); // told them once; don't repeat it every tick
+      } catch {
+        // Couldn't even report it — leave unmarked and try again next tick.
+      }
+      continue;
+    }
+
+    try {
+      const owner = await client.users.fetch(config.ownerId);
+      await owner.send(formatActionDone(action, device));
+    } catch (error) {
+      console.error(`[pusher] failed to report scheduled action ${action.id}:`, error);
+    }
+    // Marked regardless of whether the DM landed: the physical action already
+    // happened, and re-running it to fix a failed notification would be worse.
+    markFired(action.id);
+  }
+}
+
+/** Resolves the target device by name at fire time and performs the action. */
+async function performAction(action: ScheduledActionView): Promise<string> {
+  if (action.action === "vacuum_start") {
+    const vacuums = await listVacuums();
+    const vacuum = action.target
+      ? resolveVacuumFromList(vacuums, action.target)
+      : vacuums.length === 1
+        ? vacuums[0]!
+        : (() => {
+            throw new Error("more than one vacuum — the scheduled action needs a name");
+          })();
+    await startVacuum(vacuum);
+    return vacuum.name;
+  }
+
+  if (!action.target) throw new Error("no device name stored for this action");
+  const device = resolveDeviceFromList(await listDevices(), action.target);
+  await setDevicePower(device.id, action.action === "plug_on");
+  return device.name;
+}
+
 export interface WeeklyHabitStat extends HabitSummary {
   /** Days logged in the last 7. */
   days_logged: number;
@@ -439,6 +538,7 @@ export async function gatherWeekSummary(): Promise<{
   remindersPending: number;
   upcomingAssignments: CanvasAssignment[];
   upcomingHolidays: SwedishHoliday[];
+  goals: GoalWithProgress[];
 }> {
   const counts = weeklyLogCounts();
   const habits = listHabits().map((h) => ({ ...h, days_logged: counts.get(h.name) ?? 0 }));
@@ -450,7 +550,33 @@ export async function gatherWeekSummary(): Promise<{
     remindersPending: listReminders({ status: "pending", limit: 1000 }).length,
     upcomingAssignments: await canvasAssignmentsOrEmpty(7),
     upcomingHolidays: holidaysWithin(7, today),
+    goals: goalsWithProgress(today),
   };
+}
+
+/**
+ * One line per goal. Says the unflattering thing plainly when that's what
+ * the data shows — a weekly check-in that only reports good news isn't a
+ * check-in. Where no projection was possible, it says so rather than
+ * quietly omitting the goal, which would read as "fine".
+ */
+function describeGoal(goal: GoalWithProgress): string {
+  const unit = goal.unit ? ` ${goal.unit}` : "";
+  const head = `${goal.metric_name}: ${goal.current ?? "?"}${unit} → ${goal.target}${unit} by ${goal.deadline}`;
+  switch (goal.verdict) {
+    case "reached":
+      return `${head} — reached.`;
+    case "on_track":
+      return `${head} — on track (${goal.projected_day}).`;
+    case "behind":
+      return `${head} — behind, on pace for ${goal.projected_day} (${goal.days_off} days late).`;
+    case "wrong_way":
+      return `${head} — moving away from it.`;
+    case "flat":
+      return `${head} — not moving.`;
+    default:
+      return `${head} — not enough logged to say yet.`;
+  }
 }
 
 /**
@@ -465,6 +591,7 @@ export function formatDigest(
   remindersPending: number,
   upcomingAssignments: CanvasAssignment[] = [],
   upcomingHolidays: SwedishHoliday[] = [],
+  goals: GoalWithProgress[] = [],
 ): string {
   const lines: string[] = [`Week in review:`];
   if (habits.length === 0) {
@@ -478,6 +605,9 @@ export function formatDigest(
     `${remindersCompleted} reminder${remindersCompleted === 1 ? "" : "s"} done this week, ` +
       `${remindersPending} still open.`,
   );
+  if (goals.length) {
+    lines.push(`Goals:`, ...goals.map((g) => `  - ${describeGoal(g)}`));
+  }
   if (upcomingAssignments.length || upcomingHolidays.length) {
     lines.push(`Coming up this week:`);
     lines.push(...upcomingAssignments.map((a) => `  - ${a.name} (${a.course}, due ${a.dueAt.slice(0, 10)})`));
@@ -501,6 +631,7 @@ async function checkWeeklyDigest(client: Client): Promise<void> {
       data.remindersPending,
       data.upcomingAssignments,
       data.upcomingHolidays,
+      data.goals,
     );
     await owner.send(message);
     markDigested(today); // only after the send actually succeeds
@@ -540,12 +671,46 @@ function holidaysWithin(days: number, today: string): SwedishHoliday[] {
   return all.filter((h) => h.date >= today && h.date <= cutoff);
 }
 
+/** At or below this, the cold itself is the news. */
+const COLD_C = 0;
+/** Above this, wind is worth a mention regardless of what's falling. */
+const WINDY_KPH = 40;
+const WET = /rain|snow|drizzle|shower|thunder|sleet|freezing/i;
+
+/**
+ * Pure. One line about the weather, or null when there's nothing worth
+ * saying. Deliberately silent on an ordinary day: a brief that opens with
+ * "12°C, cloudy" every single morning trains you to skip the first line,
+ * and then it's not there when it matters.
+ */
+export function weatherNote(weather: WeatherResult): string | null {
+  const cold = weather.temperature_c <= COLD_C;
+  const wet = WET.test(weather.condition);
+  const windy = weather.wind_kph >= WINDY_KPH;
+  if (!cold && !wet && !windy) return null;
+
+  const parts = [`${Math.round(weather.temperature_c)}°C`, weather.condition];
+  if (windy) parts.push(`wind ${Math.round(weather.wind_kph)} km/h`);
+  return `Outside: ${parts.join(", ")}.`;
+}
+
+/** Non-fatal weather fetch — the brief goes out regardless, same posture as Canvas. */
+async function weatherNoteOrNull(): Promise<string | null> {
+  try {
+    return weatherNote(await getWeather());
+  } catch (error) {
+    console.error("[pusher] failed to fetch weather for morning brief:", error);
+    return null;
+  }
+}
+
 export function formatMorningBrief(
   reminders: ReminderView[],
   atRisk: HabitSummary[],
   events: googleCalendar.CalendarEvent[] = [],
   canvasAssignmentsDueToday: CanvasAssignment[] = [],
   holidayToday: string | null = null,
+  weather: string | null = null,
 ): string {
   if (
     reminders.length === 0 &&
@@ -554,9 +719,12 @@ export function formatMorningBrief(
     canvasAssignmentsDueToday.length === 0 &&
     !holidayToday
   ) {
+    // Weather alone is deliberately not enough to send a brief — it would
+    // turn "nothing to report" into a daily weather bot.
     throw new Error("formatMorningBrief called with nothing to say");
   }
   const lines: string[] = [];
+  if (weather) lines.push(weather);
   if (holidayToday) lines.push(`Today's a public holiday: ${holidayToday}.`);
   if (events.length) {
     lines.push(`On the calendar today:`, ...events.map((e) => `  - ${e.summary} (${formatEventTime(e.start)})`));
@@ -612,7 +780,9 @@ async function checkMorningBrief(client: Client): Promise<void> {
 
   try {
     const owner = await client.users.fetch(config.ownerId);
-    await owner.send(formatMorningBrief(dueToday, atRisk, events, canvasAssignmentsDueToday, holidayToday));
+    await owner.send(
+      formatMorningBrief(dueToday, atRisk, events, canvasAssignmentsDueToday, holidayToday, await weatherNoteOrNull()),
+    );
     markBriefed(today); // only after the send actually succeeds
   } catch (error) {
     console.error("[pusher] failed to send morning brief:", error);
@@ -780,6 +950,7 @@ async function tick(client: Client): Promise<void> {
   if (getMuteUntil()) return; // vacation mode: skip every other proactive DM this tick
   await checkAndPush(client);
   await checkScheduledChecks(client);
+  await checkScheduledActions(client);
   await checkAtRiskNudge(client);
   await checkElectricityNudge(client);
   await checkImportantDates(client);

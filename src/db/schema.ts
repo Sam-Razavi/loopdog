@@ -132,6 +132,44 @@ CREATE TABLE IF NOT EXISTS metric_logs (
 CREATE INDEX IF NOT EXISTS idx_metric_logs_lookup
   ON metric_logs(metric_id, day DESC);
 
+-- A target and a deadline for a metric — the destination metrics otherwise
+-- lack. Direction (up or down) is deliberately not stored: it's inferred at
+-- read time from where the metric started relative to the target, so it
+-- can't drift out of sync with the data. One goal per metric, since two
+-- competing targets for the same number is a contradiction rather than a
+-- feature.
+CREATE TABLE IF NOT EXISTS goals (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  metric_name  TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  target_value REAL NOT NULL,
+  deadline_day TEXT NOT NULL,           -- YYYY-MM-DD
+  created_at   TEXT NOT NULL
+);
+
+-- Physical actions to perform later: a plug switching on when power is
+-- cheapest, the vacuum running while the flat is empty. Distinct from
+-- reminders because a reminder's payload is text to send, while these
+-- change something in the world -- and because the failure modes differ
+-- enough to be worth separating (a missed reminder is an annoyance; a
+-- vacuum firing at 3am is not).
+--
+-- target holds the device name as the user said it, resolved to a device id
+-- only at fire time: a stored id would silently act on the wrong device if
+-- one were renamed or replaced, whereas an unresolvable name fails loudly.
+CREATE TABLE IF NOT EXISTS scheduled_actions (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  action     TEXT NOT NULL,             -- 'plug_on' | 'plug_off' | 'vacuum_start'
+  target     TEXT,                      -- device name; NULL when there's only one candidate
+  run_at     TEXT NOT NULL,             -- UTC ISO-8601
+  reason     TEXT,                      -- e.g. "cheapest 3h window tonight", for the confirmation DM
+  recurrence TEXT,                      -- NULL, 'daily', or 'weekly'
+  created_at TEXT NOT NULL,
+  fired_at   TEXT                       -- NULL until it actually ran
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_actions_due
+  ON scheduled_actions(fired_at, run_at);
+
 -- Google OAuth (Calendar only -- the device flow can't carry Gmail scopes;
 -- Gmail has its own separate client, see google.ts): at most one row, same
 -- single-row shape as mute. 'pending' while waiting on the user to approve

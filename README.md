@@ -55,7 +55,7 @@ to open.
 
 ## How it works
 
-Every message goes to Claude (`claude-sonnet-5`) with up to seventy-one tools
+Every message goes to Claude (`claude-sonnet-5`) with up to seventy-eight tools
 attached — only the ones that can actually run. Tools belonging to an
 integration with no credentials configured (Canvas, smart plugs, the vacuum,
 Telegram, email, trip planning, web search) are left out of the request
@@ -104,8 +104,12 @@ everything else.
 | `list_canvas_grades` | Current grades across all active Canvas courses |
 | `get_week_overview` | Reminders, important dates, holidays, and Canvas assignments in one view |
 | `get_monthly_spending` | A spending metric totaled by calendar month, for comparing month over month |
-| `list_smart_devices` | List smart-home devices (DELTACO/Tuya smart plugs) and whether each is online |
+| `list_smart_devices` | List smart-home devices (DELTACO/Tuya plugs and lamps), whether each is online, and what it can do |
 | `set_smart_device_power` | Turn a smart plug on or off |
+| `set_light` | Set a lamp's brightness, colour, or colour temperature |
+| `schedule_device_action` | Run a plug or the vacuum later — at a time, or in the cheapest power window |
+| `list_scheduled_actions` | What's scheduled to happen to a device, with resolved local times |
+| `cancel_scheduled_action` | Cancel a scheduled device action |
 | `start_vacuum` | Start the Roborock vacuum cleaning |
 | `stop_vacuum` | Stop the Roborock vacuum |
 | `get_vacuum_status` | Get the vacuum's current status (cleaning state, battery, etc) |
@@ -123,6 +127,9 @@ everything else.
 | `get_metric_history` | A metric's recent day-by-day values and current reading |
 | `list_metrics` | Everything numeric being tracked, with today's value |
 | `metric_chart` | A trend-line image of a metric's recent history, as a Discord attachment |
+| `set_goal` | Give a tracked metric a target and a deadline |
+| `list_goals` | Every goal with its projected arrival date and whether it's on pace |
+| `delete_goal` | Drop a goal, keeping the metric's history |
 | `find_correlation` | Raw stats on how two habits/metrics relate — a rate difference, an average difference, or a correlation coefficient |
 | `connect_google` | Start or check a Google Calendar connection (optional, see below) |
 | `disconnect_google` | Unlink the Google account |
@@ -222,6 +229,14 @@ holiday, that leads the message. If Google is connected (see below), today's
 calendar events come next, ahead of reminders, Canvas assignments due today
 (if Canvas is set up), and habits. If there's genuinely nothing to say, it
 stays quiet. Fires at most once per day.
+
+The weather leads the whole thing, but **only when it's worth saying** — at or
+below freezing, anything falling out of the sky, or real wind. An ordinary
+12°C-and-cloudy morning gets no weather line at all, deliberately: a line
+that's there every single day is one you learn to skip, and then it isn't read
+on the morning it matters. Weather alone never triggers a brief either — on a
+day with nothing else to report, Loopdog stays quiet rather than becoming a
+weather bot.
 
 ### Vacation / mute mode
 
@@ -791,6 +806,46 @@ parsing, HTML stripped from announcement text) — but not against an
 actual Canvas account, so this is the one most likely to need a
 follow-up fix once real data flows through it.
 
+### Goals, and whether you'll actually make it
+
+A metric is a number with no destination. `set_goal` gives it one — "75 kg by
+December" — and `list_goals` answers the question that actually matters: not
+"what's the trend" but *"will I get there?"* It fits a line through what
+you've logged, projects the arrival date, and compares it to the deadline:
+**"on pace for March 3rd — six weeks late."** Goals also appear in the Sunday
+digest, which is where a pace check belongs.
+
+It refuses to guess when guessing would be dishonest, the same way
+`find_correlation` does. Fewer than four readings is "not enough logged to say
+yet." A flat line is "not moving" rather than a date decades out (dividing by
+a near-zero slope produces a very confident nonsense answer). A number heading
+the wrong way is "moving away from it" — no arrival date at all, because there
+isn't one. Direction is inferred from where the metric *started*, so
+overshooting a target reads as "reached" rather than flipping to "wrong way."
+
+### Scheduled device actions
+
+Loopdog could already tell you when electricity is cheapest, and could flip a
+plug — but not both, so you still had to be awake at 2am to benefit. Now:
+
+> **"Run the washing machine in tonight's cheapest 3-hour window."**
+
+It finds the cheapest block in the price curve, schedules the plug for the
+start of it, and tells you the time it picked. Also works with a plain time
+("turn the heater on at 6"), recurring, and with the vacuum ("clean every
+Tuesday at 10").
+
+**Quiet hours apply per action, not across the board** — a deliberate
+asymmetry. A plug switching on at 03:00 is silent, and 03:00 is frequently the
+entire point; blocking it would defeat the feature. A vacuum at 03:00 wakes
+the household, so noisy actions wait for the window to pass. Both are
+suppressed entirely during a vacation mute: an appliance switching itself on
+in an empty flat is exactly the thing not to do.
+
+The device is stored by **name**, resolved only when the action fires. A
+stored device id would silently act on the wrong thing if a device were
+renamed or replaced; a stale name fails loudly instead, and tells you.
+
 ### Smart plugs (DELTACO / Tuya)
 
 "Turn on the lamp," "turn off the coffee maker" — controls DELTACO smart
@@ -823,6 +878,23 @@ and device-resolution logic all work correctly — but whether the actual
 signature bytes pass Tuya's real validation can only be confirmed
 against a live account. Expect this one specifically to need a follow-up
 fix.
+
+### Smart lamps
+
+The same Tuya connection drives lamps, not just plugs: brightness, colour, and
+colour temperature via `set_light` ("dim the bedroom lamp to 20%", "make it
+warm white", "turn the lamp red").
+
+Capabilities are **read from the device**, never assumed. Tuya reports each
+device's real data points and their ranges, and those ranges genuinely differ
+between devices — brightness is 25–255 on older firmware and 10–1000 on newer.
+So Loopdog asks the lamp what it supports and maps your 0–100 onto whatever it
+actually uses, which also means `list_smart_devices` can say which devices are
+dimmable or colour-capable instead of offering brightness on a plug.
+
+One non-obvious detail handled for you: a lamp sitting in white mode silently
+ignores a colour command, and vice versa — no error, it just doesn't change.
+Loopdog sends the mode switch alongside, so the command actually takes effect.
 
 ### Roborock vacuum
 

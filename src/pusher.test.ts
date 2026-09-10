@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   formatAtRiskNudge,
   formatCalendarCheckMessage,
+  formatActionDone,
   formatCanvasCheckMessage,
   formatCanvasDeadlineNudge,
   formatInboxCheckMessage,
@@ -10,6 +11,7 @@ import {
   formatImportantDateNudge,
   formatMorningBrief,
   formatPushMessage,
+  weatherNote,
 } from "./pusher";
 import type { WeeklyHabitStat } from "./pusher";
 import type { ReminderView, Recurrence } from "./db/reminders";
@@ -336,4 +338,104 @@ test("scheduled inbox check counts per source and names ones that failed", () =>
   assert.match(lines[1]!, /gmail: 2 recent/);
   assert.match(lines[2]!, /hotmail: 0 recent/);
   assert.match(lines[3]!, /telegram: couldn't check/);
+});
+
+function weather(overrides: Partial<Parameters<typeof weatherNote>[0]> = {}) {
+  return { city: "Stockholm", temperature_c: 12, condition: "partly cloudy", wind_kph: 10, ...overrides };
+}
+
+test("the morning brief stays silent about ordinary weather", () => {
+  // A line every single day is a line you learn to skip — and then it isn't
+  // read on the morning it matters.
+  assert.equal(weatherNote(weather()), null);
+  assert.equal(weatherNote(weather({ temperature_c: 18, condition: "clear sky" })), null);
+});
+
+test("cold, wet, or windy weather earns a line", () => {
+  assert.match(weatherNote(weather({ temperature_c: -8 }))!, /-8°C/);
+  assert.match(weatherNote(weather({ condition: "moderate rain" }))!, /rain/);
+  assert.match(weatherNote(weather({ condition: "heavy snow showers" }))!, /snow/);
+  assert.match(weatherNote(weather({ wind_kph: 55 }))!, /wind 55 km\/h/);
+});
+
+test("freezing point counts as cold — the boundary that matters for ice", () => {
+  assert.notEqual(weatherNote(weather({ temperature_c: 0 })), null);
+  assert.equal(weatherNote(weather({ temperature_c: 1 })), null);
+});
+
+test("weather leads the brief when there is one, and never sends a brief on its own", () => {
+  const message = formatMorningBrief(
+    [reminder({ text: "stretch", due_local: "09:00" })],
+    [],
+    [],
+    [],
+    null,
+    "Outside: -8°C, light snow.",
+  );
+  assert.equal(message.split("\n")[0], "Outside: -8°C, light snow.");
+
+  // Weather alone must not manufacture a brief on an otherwise empty day.
+  assert.throws(() => formatMorningBrief([], [], [], [], null, "Outside: -8°C, light snow."), /nothing to say/);
+});
+
+test("a fired action is reported in plain past tense, with why it ran", () => {
+  const base = {
+    id: 1,
+    target: "washing machine",
+    run_at: "2026-01-01T02:00:00.000Z",
+    run_local: "03:00",
+    recurrence: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+    fired_at: null,
+  };
+  assert.equal(
+    formatActionDone({ ...base, action: "plug_on", reason: "cheapest 3h window, 0.42 SEK/kWh" }, "washing machine"),
+    "Turned on washing machine (cheapest 3h window, 0.42 SEK/kWh).",
+  );
+  assert.equal(
+    formatActionDone({ ...base, action: "plug_off", reason: null }, "heater"),
+    "Turned off heater.",
+  );
+  assert.equal(
+    formatActionDone({ ...base, action: "vacuum_start", reason: null }, "Roborock"),
+    "Started Roborock.",
+  );
+});
+
+test("the digest names a goal that is behind, rather than quietly omitting it", () => {
+  const message = formatDigest([], 0, 0, [], [], [
+    {
+      metric_name: "weight",
+      unit: "kg",
+      verdict: "behind",
+      current: 79.5,
+      target: 75,
+      deadline: "2026-03-01",
+      rate_per_day: -0.01,
+      projected_day: "2026-08-20",
+      days_off: 172,
+      needed_rate_per_day: -0.09,
+    },
+  ]);
+  assert.match(message, /Goals:/);
+  assert.match(message, /weight: 79\.5 kg → 75 kg by 2026-03-01 — behind, on pace for 2026-08-20 \(172 days late\)/);
+});
+
+test("the digest says so plainly when a goal can't be projected yet", () => {
+  const message = formatDigest([], 0, 0, [], [], [
+    {
+      metric_name: "weight",
+      unit: null,
+      verdict: "not_enough_data",
+      current: 80,
+      target: 75,
+      deadline: "2026-03-01",
+      rate_per_day: null,
+      projected_day: null,
+      days_off: null,
+      needed_rate_per_day: null,
+    },
+  ]);
+  // Omitting it would read as "fine", which is the one thing it isn't known to be.
+  assert.match(message, /not enough logged to say yet/);
 });

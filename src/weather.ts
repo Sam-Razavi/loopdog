@@ -38,7 +38,7 @@ export function describeWeatherCode(code: number): string {
   return WEATHER_CODES[code] ?? `unrecognized conditions (code ${code})`;
 }
 
-interface WeatherResult {
+export interface WeatherResult {
   city: string;
   temperature_c: number;
   condition: string;
