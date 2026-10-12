@@ -130,6 +130,13 @@ export function formatCalendarCheckMessage(label: string, events: googleCalendar
 async function fetchScheduledCheck(reminder: ReminderView): Promise<string | null> {
   switch (reminder.kind) {
     case "calendar":
+      // Expired is not "never set up": telling someone who connected their
+      // calendar that it "isn't set up yet" is wrong and sends them hunting for
+      // the wrong fix. Sent as the message itself, so like the not-configured
+      // case it fires once and advances rather than nagging every tick.
+      if (googleCalendar.getStatus() === "expired") {
+        return `${reminder.text}: the Google Calendar connection has expired — ask me to reconnect it.`;
+      }
       if (!googleCalendar.isConnected()) return null;
       // Same "today" window as the morning brief — one consistent default
       // rather than a second configurable window just for this.

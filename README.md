@@ -131,7 +131,7 @@ everything else.
 | `list_goals` | Every goal with its projected arrival date and whether it's on pace |
 | `delete_goal` | Drop a goal, keeping the metric's history |
 | `find_correlation` | Raw stats on how two habits/metrics relate — a rate difference, an average difference, or a correlation coefficient |
-| `connect_google` | Start or check a Google Calendar connection (optional, see below) |
+| `connect_google` | Start, or verify against Google, a Calendar connection — and replace it if it has lapsed (optional, see below) |
 | `disconnect_google` | Unlink the Google account |
 | `list_calendar_events` | Upcoming events, once connected |
 | `create_calendar_event` | Add an event to the calendar |
@@ -483,6 +483,31 @@ nudge).
 
 Both are optional at boot — leave them unset and Calendar tools just report
 "not set up yet" instead of anything breaking.
+
+**When the connection goes stale.** A connection can die without anyone telling
+Loopdog: Google expires or revokes the saved login, and nothing happens until
+the next time it's used. Loopdog handles this rather than pretending otherwise.
+"Connect my Google account" doesn't just check that a login is *stored* — it
+asks Google, so "connected" is a checked fact. If the login turns out to be
+dead, it starts a fresh connection in the same message and hands you the new
+code, rather than a second round trip. A calendar call that hits a dead login
+marks it expired, so the next message knows too.
+
+The distinction that matters: **only Google's explicit "this token is expired or
+revoked" counts as dead.** A timeout, a 5xx, a rate limit, or any response
+Loopdog doesn't recognise leaves the saved login untouched and says Google
+couldn't be reached — discarding a perfectly good login because Google had a bad
+moment would manufacture the very problem being solved. Refused OAuth client
+credentials (a rotated secret) are reported as such and also leave the login
+alone, since reconnecting can't help until that's fixed. Gmail's separate login
+reads failures the same way, so a blip no longer tells you to re-run
+`npm run gmail-login`.
+
+> **If this keeps happening roughly weekly:** the OAuth consent screen is
+> probably still in **Testing**, where Google expires every refresh token after
+> 7 days. Detection and recovery above make that painless, but only
+> **OAuth consent screen → Publish app** stops it recurring. The app stays
+> unverified, which is fine for personal use.
 
 **Worth knowing — Gmail isn't part of this connection, and can't be.** The
 original design was one device-flow connection covering both Calendar and

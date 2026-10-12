@@ -4,7 +4,7 @@ import { habitsAtRisk } from "./db/habits";
 import { listMemories } from "./db/memories";
 import { getMuteUntil } from "./db/mute";
 import { listOverdue } from "./db/reminders";
-import { getStatus as getCalendarStatus } from "./google";
+import { getStatus as getCalendarStatus, isGmailUsable } from "./google";
 import { getStatus as getHotmailStatus } from "./hotmail";
 import { getStatus as getPrivatemailStatus } from "./privatemail";
 import { getStatus as getTelegramStatus } from "./telegram";
@@ -161,14 +161,35 @@ function liveState(): string {
     );
   }
 
+  // "connected" here is a local read of what we last knew — it never contacts
+  // Google, since this runs on every message. So it must not be phrased as a
+  // guarantee: this line used to say "no need to check first," which told the
+  // model to skip the one verification step (connect_google) while the status
+  // it was trusting was only ever "a token row exists."
   const googleStatus = getCalendarStatus();
   if (googleStatus === "connected") {
     lines.push(
       ``,
-      `Google is connected — Calendar (list_calendar_events/create_calendar_event) and Gmail (list_emails/get_email/create_email_draft) tools are usable directly, no need to check first. There is deliberately no send-email tool — draft only, the user sends it themselves.`,
+      `Google Calendar is connected — list_calendar_events/create_calendar_event are usable directly. If one of them reports the connection expired, call connect_google: it re-checks the connection with Google and starts a new one if it has lapsed (hand the user the code it returns).`,
+    );
+  } else if (googleStatus === "expired") {
+    lines.push(
+      ``,
+      `The Google Calendar connection has expired — Google stopped honouring the saved login (revoked, or lapsed after 7 days while the OAuth app is in "Testing"). The calendar tools won't work until it's renewed. If the user asks about their calendar, or something fails because of this, say so and offer to reconnect: connect_google starts a new connection and returns a code to enter at google.com/device. Don't raise it unprompted otherwise.`,
     );
   } else if (googleStatus === "pending") {
     lines.push(``, `A Google connection is mid-setup, waiting on the user to approve it in a browser. If asked, call connect_google to check whether it's gone through yet.`);
+  }
+
+  // Gmail is its own client and its own env-var login — not part of the
+  // Google Calendar connection above, so it's reported on its own terms. (This
+  // block used to be folded into the Google line and still claimed Gmail came
+  // with it after Gmail got a separate client.)
+  if (isGmailUsable()) {
+    lines.push(
+      ``,
+      `Gmail is set up — read and draft via list_emails/get_email/create_email_draft. It's a separate login from Google Calendar. There is deliberately no send-email tool — draft only, the user sends it themselves.`,
+    );
   }
 
   const hotmailStatus = getHotmailStatus();
@@ -198,7 +219,7 @@ function liveState(): string {
   }
 
   const usableEmailProviders = [
-    googleStatus === "connected" ? "Gmail" : null,
+    isGmailUsable() ? "Gmail" : null,
     hotmailStatus === "connected" ? "Hotmail" : null,
     privatemailStatus === "configured" ? "PrivateMail" : null,
   ].filter((p): p is string => p !== null);

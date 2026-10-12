@@ -67,7 +67,12 @@ function requireCredentials(): { clientId: string; clientSecret: string } {
 }
 
 interface AuthRow {
-  status: "pending" | "connected";
+  /**
+   * 'expired' means we *proved* the refresh token is dead (Google answered
+   * invalid_grant) — as opposed to merely failing to reach Google, which
+   * leaves a connected row alone. See classifyRefreshFailure.
+   */
+  status: "pending" | "connected" | "expired";
   device_code: string | null;
   user_code: string | null;
   verification_url: string | null;
@@ -82,6 +87,15 @@ function getAuthRow(): AuthRow | undefined {
   return getDb().prepare(`SELECT * FROM google_auth WHERE id = 1`).get() as AuthRow | undefined;
 }
 
+/**
+ * A local read only — it reports what we *last knew*, and never contacts
+ * Google. That is deliberate for the callers that use it as a cheap gate
+ * (the scheduler, the system prompt rebuilt on every message), but it means
+ * "true" is not a promise the token still works: a refresh token can die at
+ * any moment without us hearing about it. connect() is the one function that
+ * verifies against Google; a failed refresh anywhere flips this to false by
+ * marking the row 'expired'.
+ */
 export function isConnected(): boolean {
   return getAuthRow()?.status === "connected";
 }
@@ -106,7 +120,7 @@ function requireGmailUsable(): void {
 }
 
 /** For the system prompt's live-state block — omits itself entirely when never set up. */
-export function getStatus(): "not_connected" | "pending" | "connected" {
+export function getStatus(): "not_connected" | "pending" | "connected" | "expired" {
   return getAuthRow()?.status ?? "not_connected";
 }
 
@@ -162,6 +176,82 @@ interface TokenResponse {
   refresh_token?: string;
   expires_in?: number;
   error?: string;
+  error_description?: string;
+}
+
+/**
+ * What a failed refresh *means*, which is the whole difference between a
+ * helpful reconnect prompt and destroying a perfectly good login.
+ *
+ *  - "dead": Google answered invalid_grant (RFC 6749 §5.2) — the refresh
+ *    token is expired or revoked. The only proof of death there is.
+ *  - "client_rejected": invalid_client / unauthorized_client — *our*
+ *    credentials were refused (a rotated secret, a deleted OAuth client).
+ *    The saved token may be perfectly fine, and reconnecting can't help until
+ *    the env vars are fixed, so it must not be wiped.
+ *  - "transient": everything else — no response, 5xx, 429, a body that isn't
+ *    JSON, an error code we don't recognise. Unknown deliberately lands here:
+ *    wrongly keeping a token a little longer is recoverable, wrongly
+ *    discarding a live one forces a re-login nobody needed.
+ *
+ * Pure, so the table of cases is testable without Google.
+ */
+export type RefreshFailure = "dead" | "client_rejected" | "transient";
+
+export function classifyRefreshFailure(
+  httpStatus: number | null,
+  body: { error?: unknown } | null,
+): RefreshFailure {
+  if (httpStatus === null) return "transient"; // never got an answer at all
+  const error = typeof body?.error === "string" ? body.error : undefined;
+  if (httpStatus === 400 || httpStatus === 401) {
+    if (error === "invalid_grant") return "dead";
+    if (error === "invalid_client" || error === "unauthorized_client") return "client_rejected";
+  }
+  return "transient";
+}
+
+type RefreshOutcome =
+  | { ok: true; accessToken: string; expiresIn: number }
+  | { ok: false; kind: RefreshFailure; detail: string };
+
+/**
+ * The one refresh-token POST, shared by Calendar and Gmail so the two can't
+ * drift apart on how a failure is read. Never throws for an expected outcome:
+ * a rejected fetch and an unparseable body both come back as "transient"
+ * rather than escaping as a raw TypeError/SyntaxError.
+ */
+async function postRefresh(params: {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+}): Promise<RefreshOutcome> {
+  let response: Response;
+  try {
+    response = await fetch(TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: params.clientId,
+        client_secret: params.clientSecret,
+        refresh_token: params.refreshToken,
+        grant_type: "refresh_token",
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (error) {
+    return { ok: false, kind: "transient", detail: error instanceof Error ? error.message : String(error) };
+  }
+
+  const body = (await response.json().catch(() => null)) as TokenResponse | null;
+  if (response.ok && body?.access_token) {
+    return { ok: true, accessToken: body.access_token, expiresIn: body.expires_in ?? 3600 };
+  }
+  return {
+    ok: false,
+    kind: classifyRefreshFailure(response.status, body),
+    detail: body?.error_description ?? body?.error ?? `HTTP ${response.status}`,
+  };
 }
 
 async function pollToken(deviceCode: string): Promise<TokenResponse> {
@@ -194,18 +284,52 @@ function storeConnected(access: string, refresh: string, expiresInSeconds: numbe
 
 export type ConnectResult =
   | { status: "connected"; already: boolean }
-  | { status: "pending"; verification_url: string; user_code: string }
+  | {
+      status: "pending";
+      verification_url: string;
+      user_code: string;
+      /** The previous connection turned out to be dead, so this is a replacement — say so. */
+      replaced_expired?: true;
+    }
   | { status: "expired" | "denied" };
 
 /**
  * Starts (or continues) the device-flow connection. Re-invokable and
- * idempotent by design: already connected -> reports so; a pending code
- * exists -> polls it once and reports the outcome; nothing pending ->
- * starts a fresh flow. This is the only tool call in the whole loop, so it
- * has to handle "did it work yet?" naturally on a second call.
+ * idempotent by design: a pending code exists -> polls it once and reports
+ * the outcome; nothing pending -> starts a fresh flow. This is the only tool
+ * call in the whole loop, so it has to handle "did it work yet?" naturally on
+ * a second call.
+ *
+ * "Already connected" is *verified*, not read off the table. This used to
+ * return {already: true} the moment a row existed, which made it useless as
+ * the recovery path its own error message advertises: a dead refresh token
+ * left the row untouched, so "call connect_google to reconnect" got back
+ * "already connected" forever. Now a connected row forces a real refresh
+ * (bypassing the cached access token, which outlives the refresh token by up
+ * to an hour) and acts on the answer:
+ *   - works        -> connected, and this time the claim is true;
+ *   - proven dead  -> falls through and starts a fresh connection in the same
+ *                     call (the user just asked to connect — a second round
+ *                     trip would only be friction), flagged replaced_expired;
+ *   - can't tell   -> throws. Never claims connected on a guess, and never
+ *                     discards a login because Google had a bad moment.
  */
 export async function connect(): Promise<ConnectResult> {
-  if (isConnected()) return { status: "connected", already: true };
+  let replacedExpired = false;
+  const existing = getAuthRow();
+
+  if (existing?.status === "connected") {
+    if (existing.refresh_token) {
+      const result = await tryRefresh({ ...existing, refresh_token: existing.refresh_token });
+      if (result.kind === "ok") return { status: "connected", already: true };
+      if (result.kind !== "dead") throw refreshFailureError(result);
+      replacedExpired = true; // tryRefresh already marked the row expired
+    } else {
+      replacedExpired = true; // "connected" with no refresh token can't work; same as expired
+    }
+  } else if (existing?.status === "expired") {
+    replacedExpired = true;
+  }
 
   const row = getAuthRow();
   if (row?.status === "pending" && row.device_code) {
@@ -252,6 +376,7 @@ export async function connect(): Promise<ConnectResult> {
     status: "pending",
     verification_url: device.verification_url,
     user_code: device.user_code,
+    ...(replacedExpired ? { replaced_expired: true as const } : {}),
   };
 }
 
@@ -275,8 +400,93 @@ export async function pollPendingConnection(): Promise<"connected" | "expired" |
   return result.error === "access_denied" ? "denied" : "expired";
 }
 
+const EXPIRED_MESSAGE = "Google connection expired — call connect_google to reconnect.";
+
+/**
+ * Marks the connection dead — but only if the row still holds the refresh
+ * token we just watched fail. That guard matters: a slow background refresh
+ * (the scheduler, the morning brief) can finish *after* the user re-authorised,
+ * and without it that stale failure would mark their brand-new, healthy
+ * connection expired. Tokens are cleared too; a dead refresh token has no
+ * reason to stay on disk.
+ */
+function markExpired(deadRefreshToken: string): void {
+  getDb()
+    .prepare(
+      `UPDATE google_auth
+       SET status = 'expired', access_token = NULL, refresh_token = NULL,
+           token_expires_at = NULL, updated_at = ?
+       WHERE id = 1 AND status = 'connected' AND refresh_token = ?`,
+    )
+    .run(nowUtcIso(), deadRefreshToken);
+}
+
+type RefreshResult =
+  | { kind: "ok"; token: string }
+  | { kind: "dead" }
+  | { kind: "client_rejected" }
+  | { kind: "transient"; detail: string };
+
+/**
+ * Attempts a real refresh against Google and records what it learned. The
+ * single place Calendar's refresh token is exercised, so detection can't be
+ * skipped by taking a different path: a dead token is marked expired here, a
+ * live one has its fresh access token stored here, and anything ambiguous
+ * changes nothing.
+ */
+async function tryRefresh(row: AuthRow & { refresh_token: string }): Promise<RefreshResult> {
+  const { clientId, clientSecret } = requireCredentials();
+  const outcome = await postRefresh({ clientId, clientSecret, refreshToken: row.refresh_token });
+
+  if (outcome.ok) {
+    // Same compare-and-set as markExpired: don't write an old connection's
+    // access token onto a row that has since been re-authorised.
+    getDb()
+      .prepare(
+        `UPDATE google_auth SET access_token = ?, token_expires_at = ?, updated_at = ?
+         WHERE id = 1 AND refresh_token = ?`,
+      )
+      .run(
+        outcome.accessToken,
+        new Date(Date.now() + outcome.expiresIn * 1000).toISOString(),
+        nowUtcIso(),
+        row.refresh_token,
+      );
+    return { kind: "ok", token: outcome.accessToken };
+  }
+
+  if (outcome.kind === "dead") {
+    markExpired(row.refresh_token);
+    return { kind: "dead" };
+  }
+  if (outcome.kind === "client_rejected") return { kind: "client_rejected" };
+  return { kind: "transient", detail: outcome.detail };
+}
+
+/** Maps a non-ok refresh to the error the model sees — each says what to do next, and they differ. */
+function refreshFailureError(result: Exclude<RefreshResult, { kind: "ok" }>): ToolError {
+  switch (result.kind) {
+    case "dead":
+      return new ToolError(EXPIRED_MESSAGE);
+    case "client_rejected":
+      return new ToolError(
+        "Google rejected this app's OAuth credentials (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET) — check " +
+          "they're current. The saved login itself wasn't touched, and reconnecting won't help until this is fixed.",
+      );
+    default:
+      return new ToolError(
+        // Deliberately never uses the word "expired", even to deny it: a tool
+        // result is read by a model, and a salient word survives its own
+        // negation often enough to get relayed to the user as the diagnosis.
+        `couldn't reach Google to refresh the calendar login (${result.detail}) — try again in a moment. ` +
+          "The saved connection is fine and nothing was changed.",
+      );
+  }
+}
+
 async function getAccessToken(): Promise<string> {
   const row = getAuthRow();
+  if (row?.status === "expired") throw new ToolError(EXPIRED_MESSAGE);
   if (!row || row.status !== "connected" || !row.access_token || !row.refresh_token) {
     throw new ToolError(
       `Google account isn't connected — call connect_google first, or ask the user to.`,
@@ -286,30 +496,9 @@ async function getAccessToken(): Promise<string> {
     return row.access_token;
   }
 
-  const { clientId, clientSecret } = requireCredentials();
-  const response = await fetch(TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: row.refresh_token,
-      grant_type: "refresh_token",
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  const data = (await response.json()) as TokenResponse;
-  if (!response.ok || !data.access_token) {
-    throw new ToolError("Google connection expired — call connect_google to reconnect.");
-  }
-  getDb()
-    .prepare(`UPDATE google_auth SET access_token = ?, token_expires_at = ?, updated_at = ? WHERE id = 1`)
-    .run(
-      data.access_token,
-      new Date(Date.now() + (data.expires_in ?? 3600) * 1000).toISOString(),
-      nowUtcIso(),
-    );
-  return data.access_token;
+  const result = await tryRefresh({ ...row, refresh_token: row.refresh_token });
+  if (result.kind === "ok") return result.token;
+  throw refreshFailureError(result);
 }
 
 export interface CalendarEvent {
@@ -321,6 +510,25 @@ export interface CalendarEvent {
 
 interface GoogleEventsResponse {
   items?: { summary?: string; start?: { dateTime?: string; date?: string }; end?: { dateTime?: string; date?: string } }[];
+}
+
+/**
+ * A 401 from the Calendar API means Google rejected an access token we
+ * believed was fresh — typically the grant was revoked a moment ago, while
+ * the cached access token still had life in it. It says nothing about the
+ * *refresh* token, so it is not proof of death and must not mark anything
+ * expired. It points at connect_google instead, which force-refreshes: that
+ * both repairs this case (a live refresh token yields a new access token) and
+ * handles a dead one. Any other status keeps the plain message.
+ */
+function calendarHttpError(action: string, status: number): ToolError {
+  if (status === 401) {
+    return new ToolError(
+      `couldn't ${action}: Google rejected the saved login (HTTP 401) — call connect_google, ` +
+        "which re-checks the connection and reconnects if it has lapsed.",
+    );
+  }
+  return new ToolError(`couldn't ${action} (HTTP ${status})`);
 }
 
 interface CalendarListEntry {
@@ -349,7 +557,7 @@ async function listCalendars(token: string): Promise<CalendarListEntry[]> {
     headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new ToolError(`couldn't list calendars (HTTP ${response.status})`);
+  if (!response.ok) throw calendarHttpError("list calendars", response.status);
   const data = (await response.json()) as { items?: CalendarListEntry[] };
   return (data.items ?? []).filter((cal) => cal.selected !== false && cal.accessRole !== "freeBusyReader");
 }
@@ -421,7 +629,7 @@ export async function createEvent(
     }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new ToolError(`couldn't create the event (HTTP ${response.status})`);
+  if (!response.ok) throw calendarHttpError("create the event", response.status);
   const item = (await response.json()) as {
     summary?: string;
     start?: { dateTime?: string };
@@ -461,30 +669,39 @@ async function getGmailAccessToken(): Promise<string> {
   // now rather than 401-ing halfway through a multi-message list call.
   if (gmailToken && gmailToken.expiresAt > Date.now() + 60_000) return gmailToken.value;
 
-  const response = await fetch(TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: config.gmailClientId,
-      client_secret: config.gmailClientSecret,
-      refresh_token: config.gmailRefreshToken,
-      grant_type: "refresh_token",
-    }),
-    signal: AbortSignal.timeout(10_000),
+  const outcome = await postRefresh({
+    clientId: config.gmailClientId,
+    clientSecret: config.gmailClientSecret,
+    refreshToken: config.gmailRefreshToken,
   });
-  const data = (await response.json()) as TokenResponse;
-  if (!response.ok || !data.access_token) {
+  if (!outcome.ok) {
+    // Unlike Calendar there is no row to mark: the token lives in an env var,
+    // so the classification only chooses which message to give. That still
+    // matters — a transient Google error used to tell the user to re-run
+    // `npm run gmail-login` for a login that was perfectly fine.
+    if (outcome.kind === "dead") {
+      throw new ToolError(
+        "Gmail's saved login is no longer valid — re-run `npm run gmail-login` and update " +
+          "GMAIL_REFRESH_TOKEN. (Google expires these after 7 days while the OAuth consent " +
+          'screen is still in "Testing" — publishing the app stops that.)',
+      );
+    }
+    if (outcome.kind === "client_rejected") {
+      throw new ToolError(
+        "Google rejected the Gmail OAuth client credentials (GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET) — " +
+          "check they match the Desktop-app client. The saved login itself wasn't the problem.",
+      );
+    }
     throw new ToolError(
-      "Gmail's saved login is no longer valid — re-run `npm run gmail-login` and update " +
-        "GMAIL_REFRESH_TOKEN. (Google expires these after 7 days while the OAuth consent " +
-        'screen is still in "Testing" — publishing the app stops that.)',
+      `couldn't reach Google to refresh the Gmail login (${outcome.detail}) — try again in a moment. ` +
+        "The saved login is fine and nothing was changed.",
     );
   }
   gmailToken = {
-    value: data.access_token,
-    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+    value: outcome.accessToken,
+    expiresAt: Date.now() + outcome.expiresIn * 1000,
   };
-  return data.access_token;
+  return outcome.accessToken;
 }
 
 export interface EmailSummary {

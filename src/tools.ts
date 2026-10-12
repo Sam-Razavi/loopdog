@@ -757,9 +757,15 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
       "their calendar, or asks 'did it connect?' / 'is it connected?' " +
       "after starting the process. Re-invokable and idempotent: if a " +
       "connection attempt is already in progress, this checks it instead of " +
-      "starting a new one; if already connected, it says so. On first call it " +
-      "returns a short code and a URL — tell the user to go there and enter " +
-      "the code, then ask you to check again once they have.",
+      "starting a new one. If already connected it actually verifies that with " +
+      "Google, so 'connected' is a checked fact — and if the old connection " +
+      "turned out to have expired, it starts a fresh one in the same call and " +
+      "marks the result replaced_expired: tell the user their connection had " +
+      "lapsed and give them the new code. Also the fix when a calendar tool " +
+      "reports the connection expired or was rejected. If Google can't be " +
+      "reached it errors instead of guessing, and nothing is lost — retry. On " +
+      "first call it returns a short code and a URL — tell the user to go " +
+      "there and enter the code, then ask you to check again once they have.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
