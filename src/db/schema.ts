@@ -179,7 +179,7 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_actions_due
 -- the rest of the app.
 CREATE TABLE IF NOT EXISTS google_auth (
   id               INTEGER PRIMARY KEY CHECK (id = 1),
-  status           TEXT NOT NULL,        -- 'pending' | 'connected'
+  status           TEXT NOT NULL,        -- 'pending' | 'connected' | 'expired' (proven dead: invalid_grant)
   device_code      TEXT,                 -- set while pending
   user_code        TEXT,                 -- set while pending — shown to the user, re-shown on a re-check
   verification_url TEXT,                 -- set while pending
@@ -188,6 +188,7 @@ CREATE TABLE IF NOT EXISTS google_auth (
   access_token     TEXT,                 -- set once connected
   refresh_token    TEXT,                 -- set once connected
   token_expires_at TEXT,                 -- access_token's own expiry
+  expiry_notified_at TEXT,               -- set once the user was told this connection lapsed; a reconnect resets it
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL
 );
@@ -200,7 +201,7 @@ CREATE TABLE IF NOT EXISTS google_auth (
 -- env var — this table simply stays empty for anyone who never sets it up.
 CREATE TABLE IF NOT EXISTS hotmail_auth (
   id               INTEGER PRIMARY KEY CHECK (id = 1),
-  status           TEXT NOT NULL,        -- 'pending' | 'connected'
+  status           TEXT NOT NULL,        -- 'pending' | 'connected' | 'expired' (proven dead: invalid_grant)
   device_code      TEXT,                 -- set while pending
   user_code        TEXT,                 -- set while pending — shown to the user, re-shown on a re-check
   verification_url TEXT,                 -- set while pending
@@ -209,6 +210,7 @@ CREATE TABLE IF NOT EXISTS hotmail_auth (
   access_token     TEXT,                 -- set once connected
   refresh_token    TEXT,                 -- set once connected
   token_expires_at TEXT,                 -- access_token's own expiry
+  expiry_notified_at TEXT,               -- set once the user was told this connection lapsed; a reconnect resets it
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL
 );

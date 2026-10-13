@@ -43,6 +43,9 @@ export function migrate(): void {
   ensureColumn("reminders", "notified_at", "notified_at TEXT");
   ensureColumn("reminders", "recurrence", "recurrence TEXT");
   ensureColumn("reminders", "kind", "kind TEXT");
+  // Existing databases predate "tell the user once when a connection lapses".
+  ensureColumn("google_auth", "expiry_notified_at", "expiry_notified_at TEXT");
+  ensureColumn("hotmail_auth", "expiry_notified_at", "expiry_notified_at TEXT");
   backfillReminderCompletions();
 }
 

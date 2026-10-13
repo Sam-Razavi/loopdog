@@ -135,7 +135,7 @@ everything else.
 | `disconnect_google` | Unlink the Google account |
 | `list_calendar_events` | Upcoming events, once connected |
 | `create_calendar_event` | Add an event to the calendar |
-| `connect_hotmail` | Start or check a Hotmail/Outlook connection — separate account from Google, both connectable at once |
+| `connect_hotmail` | Start, or verify against Microsoft, a Hotmail/Outlook connection — and replace it if it has lapsed; separate account from Google, both connectable at once |
 | `disconnect_hotmail` | Unlink the Hotmail/Outlook account |
 | `list_emails` | List or search email, from whichever of Gmail/Hotmail/PrivateMail is usable |
 | `get_email` | Full content of one email, including body text |
@@ -484,30 +484,10 @@ nudge).
 Both are optional at boot — leave them unset and Calendar tools just report
 "not set up yet" instead of anything breaking.
 
-**When the connection goes stale.** A connection can die without anyone telling
-Loopdog: Google expires or revokes the saved login, and nothing happens until
-the next time it's used. Loopdog handles this rather than pretending otherwise.
-"Connect my Google account" doesn't just check that a login is *stored* — it
-asks Google, so "connected" is a checked fact. If the login turns out to be
-dead, it starts a fresh connection in the same message and hands you the new
-code, rather than a second round trip. A calendar call that hits a dead login
-marks it expired, so the next message knows too.
-
-The distinction that matters: **only Google's explicit "this token is expired or
-revoked" counts as dead.** A timeout, a 5xx, a rate limit, or any response
-Loopdog doesn't recognise leaves the saved login untouched and says Google
-couldn't be reached — discarding a perfectly good login because Google had a bad
-moment would manufacture the very problem being solved. Refused OAuth client
-credentials (a rotated secret) are reported as such and also leave the login
-alone, since reconnecting can't help until that's fixed. Gmail's separate login
-reads failures the same way, so a blip no longer tells you to re-run
-`npm run gmail-login`.
-
-> **If this keeps happening roughly weekly:** the OAuth consent screen is
-> probably still in **Testing**, where Google expires every refresh token after
-> 7 days. Detection and recovery above make that painless, but only
-> **OAuth consent screen → Publish app** stops it recurring. The app stays
-> unverified, which is fine for personal use.
+**When the connection goes stale**, Loopdog notices and tells you — see
+[Connections that go stale](#connections-that-go-stale) below. This is the one
+thing most likely to matter here: while the OAuth consent screen is in
+"Testing", Google expires the saved login every 7 days.
 
 **Worth knowing — Gmail isn't part of this connection, and can't be.** The
 original design was one device-flow connection covering both Calendar and
@@ -580,6 +560,10 @@ Hotmail," and Loopdog gives you a short code and a URL
 code, and come back and ask "did it connect?" (or just wait — same
 background completion, same vacation-mute exception, as Google above).
 
+A Hotmail login that Microsoft stops honouring is detected, announced once, and
+replaced the same way as Google's — see
+[Connections that go stale](#connections-that-go-stale).
+
 **Read + draft only, same policy as Gmail — but enforced one layer deeper.**
 There is no send tool here either, but on top of that, the OAuth scope this
 requests (`Mail.ReadWrite`) genuinely cannot send mail at the Microsoft
@@ -609,6 +593,54 @@ yet" instead of anything breaking.
 
 **Worth knowing:** same as Google above — code-complete, reasoned through
 carefully, not yet exercised against a real Microsoft account.
+
+### Connections that go stale
+
+Google and Hotmail connections are saved logins, and a saved login can die
+without anyone telling Loopdog — Google expires or revokes it, or Microsoft does,
+and nothing happens until the next time it's used. Loopdog handles that rather
+than pretending otherwise.
+
+**"Connected" is a checked fact.** "Connect my Google account" (or Hotmail)
+doesn't just check that a login is *stored* — it asks the provider. If the login
+turns out to be dead, it starts a fresh connection in the same message and hands
+you the new code, instead of a second round trip. A calendar or email call that
+hits a dead login marks it expired, so the next message knows too, and a
+scheduled check explains that the connection expired rather than claiming it was
+never set up.
+
+**It finds out on its own, and says so once.** About once a day Loopdog checks
+each connected account in the background (one token request each — and a
+restart re-checks, so a deploy finds a dead one immediately). If one has lapsed
+you get a single DM naming it and the exact words that fix it. It won't repeat
+for that lapse; reconnecting re-arms it, so a later lapse is announced too. If
+Google or Microsoft can't be reached, it tries again within the hour rather than
+waiting a day, and without touching anything. The DM follows the usual rules:
+held through quiet hours, silent during a vacation mute.
+
+**Only the provider's explicit "expired or revoked" counts as dead.** A timeout,
+a 5xx, a rate limit, or any response Loopdog doesn't recognise leaves the saved
+login alone and says the provider couldn't be reached — discarding a perfectly
+good login because Google or Microsoft had a bad moment would manufacture the
+very problem being solved. Refused OAuth client credentials (a rotated secret)
+are reported as such and also leave the login alone, since reconnecting can't
+help until that's fixed. Gmail's separate login reads failures the same way, so a
+blip no longer tells you to re-run `npm run gmail-login`.
+
+**Hotmail specifics.** Microsoft *rotates* refresh tokens — each refresh may hand
+back a new one, which is stored — and the connection is a public client, so
+there's no client secret in the request. Two things are deliberately **not**
+assumed, because they weren't confirmed for personal Microsoft accounts: that
+the 90-day inactivity rule applies (the notice says "usually," not "after 90
+days"), and that Microsoft's `interaction_required` means the login is dead
+(it's treated as "couldn't tell," with Microsoft's own explanation shown).
+
+> **If Google keeps lapsing roughly weekly,** the OAuth consent screen is
+> probably still in **Testing**, where Google expires every refresh token after
+> 7 days. Everything above makes that painless — noticed, announced, one message
+> to fix — but only **OAuth consent screen → Publish app** stops it recurring.
+> That's a setting in Google Cloud Console that Loopdog can't change. The app
+> stays unverified, which is fine for personal use.
 
 ### PrivateMail
 

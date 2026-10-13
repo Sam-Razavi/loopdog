@@ -192,11 +192,19 @@ function liveState(): string {
     );
   }
 
+  // Same caveat as Google above: "connected" is a local read of what we last
+  // knew, not a guarantee, so the tools' own expiry error is the signal that
+  // matters and the way out is named.
   const hotmailStatus = getHotmailStatus();
   if (hotmailStatus === "connected") {
     lines.push(
       ``,
-      `Hotmail/Outlook is connected — a separate account from Google. Its email tools (list_emails/get_email/create_email_draft) are usable directly. No send tool exists for this either.`,
+      `Hotmail/Outlook is connected — a separate account from Google. Its email tools (list_emails/get_email/create_email_draft) are usable directly. If one reports the connection expired, call connect_hotmail: it re-checks the connection with Microsoft and starts a new one if it has lapsed (hand the user the code it returns). No send tool exists for this either.`,
+    );
+  } else if (hotmailStatus === "expired") {
+    lines.push(
+      ``,
+      `The Hotmail/Outlook connection has expired — Microsoft stopped honouring the saved login. Its email tools won't work until it's renewed. If the user asks about that inbox, or something fails because of this, say so and offer to reconnect: connect_hotmail starts a new connection and returns a code to enter at microsoft.com/devicelogin. Don't raise it unprompted otherwise.`,
     );
   } else if (hotmailStatus === "pending") {
     lines.push(``, `A Hotmail/Outlook connection is mid-setup, waiting on the user to approve it in a browser. If asked, call connect_hotmail to check whether it's gone through yet.`);

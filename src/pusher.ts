@@ -40,7 +40,8 @@ import {
   type CanvasNudgeKind,
 } from "./db/canvasnudges";
 import { listSwedishHolidays, type SwedishHoliday } from "./swedishholidays";
-import { anyInboxUsable, gatherAllInboxes } from "./inboxes";
+import { anyInboxUsable, expiredInboxProviders, gatherAllInboxes } from "./inboxes";
+import { pendingExpiryNotices, verifyConnections } from "./connections";
 import {
   listDueActions,
   markFired,
@@ -82,6 +83,42 @@ export function formatAtRiskNudge(habits: HabitSummary[]): string {
     `A few streaks still open tonight:`,
     ...habits.map((h) => `  - ${h.name} (${h.current_streak} days)`),
   ].join("\n");
+}
+
+/**
+ * Finds out whether a connection has quietly died, and says so once.
+ *
+ * A token is only proven dead when something tries it, so without this a lapse
+ * stayed invisible until the user next asked for their calendar or inbox —
+ * and Hotmail has no daily user at all. This verifies each connected provider
+ * about once a day (see connections.ts), then announces any that have lapsed.
+ *
+ * Verification runs ahead of the other checks so a lapse found now is already
+ * reflected when they run. The DM waits out quiet hours and is marked only
+ * after it actually sends, like every other check. Note a due scheduled
+ * calendar/inbox check can also report the same lapse in the same tick: that
+ * one explains why a specific reminder produced nothing, so it's kept.
+ */
+async function checkConnectionHealth(client: Client): Promise<void> {
+  try {
+    await verifyConnections();
+  } catch (error) {
+    // verifyConnection() is built not to throw; this is the backstop, because
+    // a health check must never be able to stop the rest of the tick.
+    console.error("[pusher] connection health check failed:", error);
+  }
+
+  if (inQuietHours()) return;
+  for (const notice of pendingExpiryNotices()) {
+    try {
+      const owner = await client.users.fetch(config.ownerId);
+      await owner.send(notice.message);
+      notice.markNotified(); // only after the send actually succeeds
+    } catch (error) {
+      console.error(`[pusher] failed to send the ${notice.provider} expiry notice:`, error);
+      // not marked — retried next tick
+    }
+  }
 }
 
 async function checkAndPush(client: Client): Promise<void> {
@@ -127,7 +164,7 @@ export function formatCalendarCheckMessage(label: string, events: googleCalendar
  * caller turns that into a one-off "it isn't connected" note rather than a
  * silent nothing. Throwing means a transient failure worth retrying.
  */
-async function fetchScheduledCheck(reminder: ReminderView): Promise<string | null> {
+export async function fetchScheduledCheck(reminder: ReminderView): Promise<string | null> {
   switch (reminder.kind) {
     case "calendar":
       // Expired is not "never set up": telling someone who connected their
@@ -142,7 +179,14 @@ async function fetchScheduledCheck(reminder: ReminderView): Promise<string | nul
       // rather than a second configurable window just for this.
       return formatCalendarCheckMessage(reminder.text, await googleCalendar.listEvents(1));
     case "inbox": {
-      if (!anyInboxUsable()) return null;
+      if (!anyInboxUsable()) {
+        // Nothing usable *because a connection lapsed* is not "never set up" —
+        // same distinction as the calendar case above.
+        const lapsed = expiredInboxProviders();
+        return lapsed.length
+          ? `${reminder.text}: the ${lapsed.join(" and ")} connection has expired — ask me to reconnect it.`
+          : null;
+      }
       const { bySource } = await gatherAllInboxes(5);
       return formatInboxCheckMessage(reminder.text, bySource);
     }
@@ -955,6 +999,7 @@ async function tick(client: Client): Promise<void> {
   // thing vacation mode should swallow.
   await checkWeatherWarnings(client);
   if (getMuteUntil()) return; // vacation mode: skip every other proactive DM this tick
+  await checkConnectionHealth(client);
   await checkAndPush(client);
   await checkScheduledChecks(client);
   await checkScheduledActions(client);

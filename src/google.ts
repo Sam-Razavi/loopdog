@@ -3,6 +3,7 @@ import { config } from "./config";
 import { nowUtcIso } from "./time";
 import { ToolError } from "./errors";
 import { buildRfc822Message } from "./email";
+import { postRefresh as postRefreshRequest, type RefreshOutcome, type TokenResponse } from "./oauthrefresh";
 
 /**
  * Google Calendar access via the OAuth device flow (RFC 8628) — the same
@@ -81,6 +82,8 @@ interface AuthRow {
   access_token: string | null;
   refresh_token: string | null;
   token_expires_at: string | null;
+  /** Set once the user has been told this connection lapsed; reset by a reconnect. */
+  expiry_notified_at: string | null;
 }
 
 function getAuthRow(): AuthRow | undefined {
@@ -171,87 +174,26 @@ async function requestDeviceCode(): Promise<DeviceCodeResponse> {
   return (await response.json()) as DeviceCodeResponse;
 }
 
-interface TokenResponse {
-  access_token?: string;
-  refresh_token?: string;
-  expires_in?: number;
-  error?: string;
-  error_description?: string;
-}
+// The classifier and the refresh POST are shared with hotmail.ts — see
+// oauthrefresh.ts for why they live in one place. Re-exported so anything that
+// imported the classifier from here keeps working.
+export { classifyRefreshFailure, type RefreshFailure } from "./oauthrefresh";
 
-/**
- * What a failed refresh *means*, which is the whole difference between a
- * helpful reconnect prompt and destroying a perfectly good login.
- *
- *  - "dead": Google answered invalid_grant (RFC 6749 §5.2) — the refresh
- *    token is expired or revoked. The only proof of death there is.
- *  - "client_rejected": invalid_client / unauthorized_client — *our*
- *    credentials were refused (a rotated secret, a deleted OAuth client).
- *    The saved token may be perfectly fine, and reconnecting can't help until
- *    the env vars are fixed, so it must not be wiped.
- *  - "transient": everything else — no response, 5xx, 429, a body that isn't
- *    JSON, an error code we don't recognise. Unknown deliberately lands here:
- *    wrongly keeping a token a little longer is recoverable, wrongly
- *    discarding a live one forces a re-login nobody needed.
- *
- * Pure, so the table of cases is testable without Google.
- */
-export type RefreshFailure = "dead" | "client_rejected" | "transient";
-
-export function classifyRefreshFailure(
-  httpStatus: number | null,
-  body: { error?: unknown } | null,
-): RefreshFailure {
-  if (httpStatus === null) return "transient"; // never got an answer at all
-  const error = typeof body?.error === "string" ? body.error : undefined;
-  if (httpStatus === 400 || httpStatus === 401) {
-    if (error === "invalid_grant") return "dead";
-    if (error === "invalid_client" || error === "unauthorized_client") return "client_rejected";
-  }
-  return "transient";
-}
-
-type RefreshOutcome =
-  | { ok: true; accessToken: string; expiresIn: number }
-  | { ok: false; kind: RefreshFailure; detail: string };
-
-/**
- * The one refresh-token POST, shared by Calendar and Gmail so the two can't
- * drift apart on how a failure is read. Never throws for an expected outcome:
- * a rejected fetch and an unparseable body both come back as "transient"
- * rather than escaping as a raw TypeError/SyntaxError.
- */
-async function postRefresh(params: {
+/** Google's refresh request: a confidential client, so it sends its secret. */
+function postRefresh(params: {
   clientId: string;
   clientSecret: string;
   refreshToken: string;
 }): Promise<RefreshOutcome> {
-  let response: Response;
-  try {
-    response = await fetch(TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: params.clientId,
-        client_secret: params.clientSecret,
-        refresh_token: params.refreshToken,
-        grant_type: "refresh_token",
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch (error) {
-    return { ok: false, kind: "transient", detail: error instanceof Error ? error.message : String(error) };
-  }
-
-  const body = (await response.json().catch(() => null)) as TokenResponse | null;
-  if (response.ok && body?.access_token) {
-    return { ok: true, accessToken: body.access_token, expiresIn: body.expires_in ?? 3600 };
-  }
-  return {
-    ok: false,
-    kind: classifyRefreshFailure(response.status, body),
-    detail: body?.error_description ?? body?.error ?? `HTTP ${response.status}`,
-  };
+  return postRefreshRequest(
+    TOKEN_URL,
+    new URLSearchParams({
+      client_id: params.clientId,
+      client_secret: params.clientSecret,
+      refresh_token: params.refreshToken,
+      grant_type: "refresh_token",
+    }),
+  );
 }
 
 async function pollToken(deviceCode: string): Promise<TokenResponse> {
@@ -415,7 +357,7 @@ function markExpired(deadRefreshToken: string): void {
     .prepare(
       `UPDATE google_auth
        SET status = 'expired', access_token = NULL, refresh_token = NULL,
-           token_expires_at = NULL, updated_at = ?
+           token_expires_at = NULL, expiry_notified_at = NULL, updated_at = ?
        WHERE id = 1 AND status = 'connected' AND refresh_token = ?`,
     )
     .run(nowUtcIso(), deadRefreshToken);
@@ -499,6 +441,38 @@ async function getAccessToken(): Promise<string> {
   const result = await tryRefresh({ ...row, refresh_token: row.refresh_token });
   if (result.kind === "ok") return result.token;
   throw refreshFailureError(result);
+}
+
+/**
+ * Checks the connection against Google without throwing — for the scheduler's
+ * daily health check, which has to tell "dead" from "couldn't tell" and must
+ * never take the scheduler down. A dead token is marked expired as a side
+ * effect, exactly as it would be by any other use.
+ */
+export async function verifyConnection(): Promise<"ok" | "expired" | "unverified" | "not_connected"> {
+  const row = getAuthRow();
+  if (row?.status === "expired") return "expired";
+  if (row?.status !== "connected" || !row.refresh_token) return "not_connected";
+  try {
+    const result = await tryRefresh({ ...row, refresh_token: row.refresh_token });
+    if (result.kind === "ok") return "ok";
+    return result.kind === "dead" ? "expired" : "unverified";
+  } catch {
+    return "unverified"; // e.g. client credentials unset — not something that proves the token dead
+  }
+}
+
+/** True when the connection has lapsed and the user hasn't been told yet. */
+export function expiryNoticePending(): boolean {
+  const row = getAuthRow();
+  return row?.status === "expired" && row.expiry_notified_at == null;
+}
+
+/** Call only after the notice actually sent. A reconnect resets it (the row is replaced). */
+export function markExpiryNotified(): void {
+  getDb()
+    .prepare(`UPDATE google_auth SET expiry_notified_at = ? WHERE id = 1 AND status = 'expired'`)
+    .run(nowUtcIso());
 }
 
 export interface CalendarEvent {

@@ -57,8 +57,15 @@ export async function gatherAllInboxes(maxPerSource: number): Promise<InboxResul
 
   const usableSources = sources.filter((s) => s.usable);
   if (usableSources.length === 0) {
+    // A lapsed connection is not the same situation as one never set up, and
+    // the fix differs: say which, so the user isn't sent to set up something
+    // they already had.
+    const lapsed = expiredInboxProviders();
+    const lapsedNote = lapsed.length
+      ? `${lapsed.join(" and ")}'s connection has expired — connect_hotmail starts a new one. `
+      : "";
     throw new ToolError(
-      "no inbox is usable yet — call connect_hotmail, or set up Gmail (a one-time `npm run gmail-login` at a terminal), PrivateMail, or Telegram. connect_google does NOT grant email — it's calendar-only.",
+      `no inbox is usable yet — ${lapsedNote}call connect_hotmail, or set up Gmail (a one-time \`npm run gmail-login\` at a terminal), PrivateMail, or Telegram. connect_google does NOT grant email — it's calendar-only.`,
     );
   }
 
@@ -73,6 +80,15 @@ export async function gatherAllInboxes(maxPerSource: number): Promise<InboxResul
   );
 
   return { bySource: Object.fromEntries(results), sources: usableSources.map((s) => s.name) };
+}
+
+/**
+ * Inbox providers whose OAuth connection exists but has lapsed. Today only
+ * Hotmail — Gmail's login is an env var with no stored state to mark, and
+ * PrivateMail/Telegram have no OAuth refresh to go stale.
+ */
+export function expiredInboxProviders(): string[] {
+  return hotmail.getStatus() === "expired" ? ["Hotmail"] : [];
 }
 
 /** Whether any inbox is usable at all — for the scheduled check's "not set up" message. */
