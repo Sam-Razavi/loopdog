@@ -42,7 +42,7 @@ import * as googleCalendar from "./google";
 import * as hotmail from "./hotmail";
 import * as privatemail from "./privatemail";
 import * as telegram from "./telegram";
-import { gatherWeekSummary } from "./pusher";
+import { gatherWeekSummary, scheduledCheckBlocker } from "./pusher";
 import { pickRandom, rollDice } from "./random";
 import { formatLocal, isValidDay, localDay, nowUtcIso, toUtcIso } from "./time";
 import { fetchReadableText } from "./webfetch";
@@ -113,8 +113,8 @@ export const ALL_TOOLS: Anthropic.Tool[] = [
             "'inbox' sends what's recent in every usable mailbox; 'canvas' sends the " +
             "week's upcoming assignments. Use one of these for 'check my calendar " +
             "every morning at 8', 'check my email every morning', 'check Canvas every " +
-            "Sunday'. If the underlying integration isn't set up when one fires, it " +
-            "says so once rather than never firing.",
+            "Sunday'. If the integration isn't usable when you create one, the result " +
+            "carries a `warning` — tell the user; it stays quiet until that's fixed.",
         },
       },
       required: ["text", "due_at"],
@@ -1746,12 +1746,26 @@ export async function runTool(name: string, rawInput: unknown): Promise<unknown>
 
   switch (name) {
     case "create_reminder": {
-      return createReminder(
+      const reminder = createReminder(
         str(input, "text"),
         toUtcIso(str(input, "due_at")),
         optionalRecurrence(input, "recurrence"),
         optionalKind(input, "kind"),
       );
+      // A scheduled check whose integration isn't usable would otherwise sit
+      // there and silently never deliver anything: recurring checks stay quiet
+      // when they can't run (explaining themselves every day was the bug), so
+      // *now* — while the user can still do something about it — is the one
+      // moment to say so. It's still created; connecting later makes it work.
+      const blocker = scheduledCheckBlocker(reminder.kind);
+      return blocker
+        ? {
+            ...reminder,
+            warning:
+              `This ${reminder.kind} check can't run right now — ${blocker}. It's saved, but will stay ` +
+              "quiet until that's fixed, so tell the user.",
+          }
+        : reminder;
     }
 
     case "list_reminders": {

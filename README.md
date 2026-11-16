@@ -391,11 +391,25 @@ checked on a schedule:
 | "check my email every morning" | What's recent in every usable mailbox — Gmail, Hotmail, PrivateMail, Telegram |
 | "check Canvas every Sunday" | The week's upcoming assignments |
 
-One-shot works too: "check my calendar at 3pm today." None of them need the
-underlying integration connected *yet* — if it isn't when the check comes due,
-it fires once, says so, and moves on rather than silently never firing. Since
-each is really just a reminder with a different push behavior, listing,
-editing, and deleting them work exactly like any other reminder.
+One-shot works too: "check my calendar at 3pm today." Since each is really just a
+reminder with a different push behavior, listing, editing, and deleting them
+work exactly like any other reminder.
+
+**When the thing being checked isn't available** — the connection lapsed, or the
+integration was never set up — a check doesn't nag:
+
+- You're told **when you create it**, while you can still do something about
+  it. It's still saved, and starts working the moment the integration does.
+- A **one-shot** check that can't run explains itself once, since that's its only
+  chance to speak.
+- A **recurring** check stays quiet and rolls forward to its next occurrence. A
+  lapsed connection already announces itself once per lapse (see
+  [Connections that go stale](#connections-that-go-stale)), so repeating it every
+  morning would just be noise. This used to be the other way round — a daily check
+  with a lapsed connection complained every morning — which is why it changed.
+
+To stop a check you no longer want, say "delete my calendar check" (or list your
+reminders first).
 
 ### Canvas deadline nudges
 

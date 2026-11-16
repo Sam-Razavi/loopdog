@@ -296,32 +296,7 @@ test("migrate() upgrades a database shaped like the live one, keeping its connec
 });
 
 // --- the wording a lapsed connection gets elsewhere ------------------------------------
-
-/** A scheduled check, shaped just enough for fetchScheduledCheck. */
-const check = (kind: "calendar" | "inbox"): never =>
-  ({ id: 1, text: "morning check", kind, recurrence: null }) as never;
-
-test("a scheduled calendar check says 'expired', not 'isn't set up', when the connection lapsed", async () => {
-  const { fetchScheduledCheck } = await import("./pusher");
-  await seed("google_auth", "expired");
-  assert.match((await fetchScheduledCheck(check("calendar")))!, /Google Calendar connection has expired/);
-});
-
-test("a scheduled calendar check with nothing ever connected still reports not-set-up (null)", async () => {
-  const { fetchScheduledCheck } = await import("./pusher");
-  assert.equal(await fetchScheduledCheck(check("calendar")), null);
-});
-
-test("a scheduled inbox check names a lapsed Hotmail rather than claiming nothing is set up", async () => {
-  const { fetchScheduledCheck } = await import("./pusher");
-  await seed("hotmail_auth", "expired");
-  assert.match((await fetchScheduledCheck(check("inbox")))!, /Hotmail connection has expired/);
-});
-
-test("a scheduled inbox check with no inbox at all still reports not-set-up (null)", async () => {
-  const { fetchScheduledCheck } = await import("./pusher");
-  assert.equal(await fetchScheduledCheck(check("inbox")), null);
-});
+// (scheduled-check wording lives in scheduledchecks.test.ts)
 
 test("check_all_inboxes' error distinguishes a lapsed Hotmail from one never connected", async () => {
   const { gatherAllInboxes, expiredInboxProviders } = await import("./inboxes");

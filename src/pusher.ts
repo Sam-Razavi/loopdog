@@ -159,41 +159,60 @@ export function formatCalendarCheckMessage(label: string, events: googleCalendar
 }
 
 /**
- * Fetches whatever a scheduled check is a check *of*. Returns the message
- * to send, or null when the underlying integration isn't set up — the
- * caller turns that into a one-off "it isn't connected" note rather than a
- * silent nothing. Throwing means a transient failure worth retrying.
+ * Why a scheduled check can't run right now, or null when it can. One source
+ * of truth for two callers that must agree: the scheduler (what to do when
+ * the time comes) and create_reminder (what to warn the user about when they
+ * set the check up, while they can still do something about it).
+ *
+ * Distinguishes "lapsed" from "never set up" because the fix differs, and
+ * telling someone who connected their calendar that it "isn't set up yet"
+ * sends them hunting for the wrong thing.
  */
-export async function fetchScheduledCheck(reminder: ReminderView): Promise<string | null> {
+export function scheduledCheckBlocker(kind: ReminderView["kind"]): string | null {
+  switch (kind) {
+    case "calendar":
+      if (googleCalendar.getStatus() === "expired") {
+        return "the Google Calendar connection has expired — ask me to reconnect it";
+      }
+      return googleCalendar.isConnected() ? null : "Google Calendar isn't connected";
+    case "inbox": {
+      if (anyInboxUsable()) return null;
+      const lapsed = expiredInboxProviders();
+      return lapsed.length
+        ? `the ${lapsed.join(" and ")} connection has expired — ask me to reconnect it`
+        : "no inbox is set up";
+    }
+    case "canvas":
+      return config.canvasBaseUrl && config.canvasApiToken ? null : "Canvas isn't set up";
+    default:
+      return null; // 'text' has nothing to check
+  }
+}
+
+/**
+ * Fetches whatever a scheduled check is a check *of*. A string is the message
+ * to send; `{ unavailable }` means it can't run right now and carries the
+ * explanation — kept apart because the two are treated differently by the
+ * caller (see checkScheduledChecks). Throwing means a transient failure worth
+ * retrying.
+ */
+export async function fetchScheduledCheck(
+  reminder: ReminderView,
+): Promise<string | { unavailable: string }> {
+  const blocker = scheduledCheckBlocker(reminder.kind);
+  if (blocker) return { unavailable: `${reminder.text}: ${blocker}.` };
+
   switch (reminder.kind) {
     case "calendar":
-      // Expired is not "never set up": telling someone who connected their
-      // calendar that it "isn't set up yet" is wrong and sends them hunting for
-      // the wrong fix. Sent as the message itself, so like the not-configured
-      // case it fires once and advances rather than nagging every tick.
-      if (googleCalendar.getStatus() === "expired") {
-        return `${reminder.text}: the Google Calendar connection has expired — ask me to reconnect it.`;
-      }
-      if (!googleCalendar.isConnected()) return null;
       // Same "today" window as the morning brief — one consistent default
       // rather than a second configurable window just for this.
       return formatCalendarCheckMessage(reminder.text, await googleCalendar.listEvents(1));
     case "inbox": {
-      if (!anyInboxUsable()) {
-        // Nothing usable *because a connection lapsed* is not "never set up" —
-        // same distinction as the calendar case above.
-        const lapsed = expiredInboxProviders();
-        return lapsed.length
-          ? `${reminder.text}: the ${lapsed.join(" and ")} connection has expired — ask me to reconnect it.`
-          : null;
-      }
       const { bySource } = await gatherAllInboxes(5);
       return formatInboxCheckMessage(reminder.text, bySource);
     }
-    case "canvas": {
-      if (!config.canvasBaseUrl || !config.canvasApiToken) return null;
+    case "canvas":
       return formatCanvasCheckMessage(reminder.text, await getAssignments(7));
-    }
     default:
       // 'text' never reaches here — checkAndPush handles it. Listed so a
       // future kind can't be added without the compiler pointing here.
@@ -229,14 +248,26 @@ export function formatCanvasCheckMessage(label: string, assignments: CanvasAssig
  * delete/update all work on one of these the same way they work on any
  * other reminder, for free.
  *
- * Not configured is treated as a real (if unwelcome) outcome, not a
- * transient failure: it fires once, says so, and still advances/marks
- * notified like a successful push, rather than silently retrying forever
- * every tick until the user happens to set it up. An actual fetch error
- * (network blip, an expired token) is the transient case — that one's
+ * A check that can't run (the connection lapsed, or the integration isn't
+ * set up) is a real outcome, not a transient failure, but what to do about it
+ * depends on whether it repeats:
+ *
+ *  - A one-shot check explains itself once. That's its only chance to speak.
+ *  - A RECURRING check stays silent and just rolls forward. This used to send
+ *    the explanation and then advance, so a daily "check my calendar" whose
+ *    connection had lapsed complained every single morning — the comment on
+ *    this function claimed it "fires once", which was true per scheduler tick
+ *    and false per occurrence. Nothing is lost by the silence: a lapsed
+ *    connection already announces itself once per lapse (connections.ts), and
+ *    a check set up before its integration existed was warned about when it
+ *    was created (create_reminder), when the user could still act on it.
+ *
+ * An actual fetch error (a network blip) is the transient case — that one's
  * skipped and retried next tick, same as every other fetch failure here.
+ *
+ * Exported so the nagging behaviour above can be tested without Discord.
  */
-async function checkScheduledChecks(client: Client): Promise<void> {
+export async function checkScheduledChecks(client: Client): Promise<void> {
   if (inQuietHours()) return;
 
   const due = listUnnotifiedOverdue().filter((r) => r.kind !== "text");
@@ -245,12 +276,20 @@ async function checkScheduledChecks(client: Client): Promise<void> {
   for (const reminder of due) {
     let message: string;
     try {
-      message =
-        (await fetchScheduledCheck(reminder)) ??
-        `${reminder.text}: ${reminder.kind} isn't set up yet, so there's nothing to check.`;
+      const result = await fetchScheduledCheck(reminder);
+      if (typeof result !== "string") {
+        if (reminder.recurrence) {
+          console.log(`[pusher] skipping recurring ${reminder.kind} check ${reminder.id}: ${result.unavailable}`);
+          advanceRecurrence(reminder.id);
+          continue;
+        }
+        message = result.unavailable;
+      } else {
+        message = result;
+      }
     } catch (error) {
       console.error(`[pusher] failed to fetch ${reminder.kind} for reminder ${reminder.id}:`, error);
-      continue; // retried next tick — transient, unlike "not set up" above
+      continue; // retried next tick — transient, unlike "can't run" above
     }
 
     try {
